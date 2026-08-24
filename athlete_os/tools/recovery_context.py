@@ -224,6 +224,31 @@ def _ordinal_metric(
     }
 
 
+def _context_notes(
+    records_by_date: dict[date, dict], as_of: date
+) -> dict:
+    notes = [
+        {
+            "date": record_date.isoformat(),
+            "text": record["context_note"],
+        }
+        for record_date, record in records_by_date.items()
+        if isinstance(record.get("context_note"), str)
+        and record["context_note"].strip()
+    ]
+    notes.sort(key=lambda note: note["date"], reverse=True)
+    recent_start = as_of - timedelta(days=RECENT_DAYS - 1)
+
+    return {
+        "latest": notes[0] if notes else None,
+        "recent_7d": [
+            note
+            for note in notes
+            if date.fromisoformat(note["date"]) >= recent_start
+        ],
+    }
+
+
 def build_recovery_context(wellness: list[dict], as_of: date) -> dict:
     """Build deterministic recovery context from normalized wellness data."""
 
@@ -286,6 +311,9 @@ def build_recovery_context(wellness: list[dict], as_of: date) -> dict:
             "motivation": _ordinal_metric(
                 records_by_date, as_of, "reported_motivation"
             ),
+        },
+        "contextual": {
+            "context_notes": _context_notes(records_by_date, as_of),
         },
         "data_coverage": {
             "wellness_records": len(records_by_date),

@@ -96,6 +96,26 @@ class RecoveryCheckinTests(unittest.TestCase):
             },
         )
 
+    @patch("athlete_os.tools.recovery_checkin.update_wellness")
+    def test_context_note_is_trimmed_passed_through_and_valid_alone(self, update):
+        text = "Mild runny nose and throat irritation today."
+
+        result = record_recovery_checkin(
+            context_note=f"  {text}  ",
+            date_value="2026-08-20",
+        )
+
+        update.assert_called_once_with(
+            date(2026, 8, 20),
+            {"AthleteOSContextNote": text},
+        )
+        self.assertEqual(result["recorded"], {"context_note": text})
+        self.assertNotIn("AthleteOSContextNote", result["recorded"])
+
+    def test_blank_context_note_is_rejected(self):
+        with self.assertRaisesRegex(ValueError, "context_note must not be empty"):
+            record_recovery_checkin(context_note="   ")
+
     def test_invalid_label_is_rejected(self):
         with self.assertRaisesRegex(ValueError, "mood must be one of"):
             record_recovery_checkin(mood="none")

@@ -49,6 +49,7 @@ def record_recovery_checkin(
     stress: str | None = None,
     mood: str | None = None,
     motivation: str | None = None,
+    context_note: str | None = None,
     date_value: str | None = None,
 ) -> dict:
     """Record subjective daily recovery information."""
@@ -72,6 +73,12 @@ def record_recovery_checkin(
     for field, value in labels.items():
         if value is not None:
             recorded[field] = _normalize_label(field, value)
+
+    if context_note is not None:
+        normalized_context_note = context_note.strip()
+        if not normalized_context_note:
+            raise ValueError("context_note must not be empty")
+        recorded["context_note"] = normalized_context_note
 
     if (sleep_hours is None) != (sleep_quality is None):
         raise ValueError(

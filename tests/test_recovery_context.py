@@ -32,6 +32,7 @@ class WellnessNormalizationTests(unittest.TestCase):
                 "AthleteOSReportedStress": 3,
                 "AthleteOSReportedMood": 4,
                 "AthleteOSReportedMotivation": 0,
+                "AthleteOSContextNote": "  Text stays exactly like this.  ",
             }
         )
 
@@ -42,6 +43,10 @@ class WellnessNormalizationTests(unittest.TestCase):
         self.assertEqual(normalized["reported_stress"], "high")
         self.assertEqual(normalized["reported_mood"], "excellent")
         self.assertEqual(normalized["reported_motivation"], "none")
+        self.assertEqual(
+            normalized["context_note"],
+            "  Text stays exactly like this.  ",
+        )
         self.assertFalse(
             any(key.startswith("AthleteOS") for key in normalized)
         )
@@ -139,6 +144,34 @@ class RecoveryContextTests(unittest.TestCase):
         self.assertEqual(resting_hr["latest"]["value"], 70)
         self.assertEqual(resting_hr["background_42d"]["mean"], 60)
 
+    def test_context_notes_are_filtered_ordered_and_preserved(self):
+        latest_text = "Mild symptoms. Better than yesterday."
+        older_text = "  Human-entered spacing is preserved.  "
+        records = [
+            wellness(0, context_note="Replaced note"),
+            wellness(0, context_note=latest_text),
+            wellness(2, context_note=older_text),
+            wellness(3, context_note=None),
+            wellness(4, context_note=""),
+            wellness(8, context_note="Older than recent window"),
+            wellness(-1, context_note="Future note"),
+        ]
+
+        result = build_recovery_context(records, AS_OF)
+        notes = result["contextual"]["context_notes"]
+
+        self.assertEqual(
+            notes["latest"],
+            {"date": "2026-08-24", "text": latest_text},
+        )
+        self.assertEqual(
+            notes["recent_7d"],
+            [
+                {"date": "2026-08-24", "text": latest_text},
+                {"date": "2026-08-22", "text": older_text},
+            ],
+        )
+
     def test_empty_history_has_none_aggregates_and_zero_coverage(self):
         result = build_recovery_context([], AS_OF)
 
@@ -153,6 +186,10 @@ class RecoveryContextTests(unittest.TestCase):
             ]
         )
         self.assertIsNone(result["subjective"]["motivation"]["latest"])
+        self.assertEqual(
+            result["contextual"]["context_notes"],
+            {"latest": None, "recent_7d": []},
+        )
         self.assertEqual(result["data_coverage"]["wellness_records"], 0)
 
     @patch("athlete_os.tools.recovery_context.get_recent_wellness_normalized")

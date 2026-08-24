@@ -17,6 +17,7 @@ RECOVERY_CHECKIN_FIELDS = {
     "stress": "AthleteOSReportedStress",
     "mood": "AthleteOSReportedMood",
     "motivation": "AthleteOSReportedMotivation",
+    "context_note": "AthleteOSContextNote",
 }
 RECOVERY_CHECKIN_ENCODINGS = {
     "sleep_quality": {
@@ -198,6 +199,7 @@ def normalize_wellness(wellness: dict) -> dict:
         "reported_motivation": RECOVERY_CHECKIN_DECODINGS[
             "motivation"
         ].get(wellness.get(RECOVERY_CHECKIN_FIELDS["motivation"])),
+        "context_note": wellness.get(RECOVERY_CHECKIN_FIELDS["context_note"]),
         "steps": wellness.get("steps"),
         "weight_kg": weight,
         "readiness": wellness.get("readiness"),
@@ -237,7 +239,7 @@ def encode_recovery_checkin(fields: dict) -> dict:
     encoded = {}
     for field, value in fields.items():
         provider_field = RECOVERY_CHECKIN_FIELDS[field]
-        if field == "sleep_hours":
+        if field in {"sleep_hours", "context_note"}:
             encoded[provider_field] = value
         else:
             encoded[provider_field] = RECOVERY_CHECKIN_ENCODINGS[field][value]
