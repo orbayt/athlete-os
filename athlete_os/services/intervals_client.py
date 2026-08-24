@@ -9,6 +9,59 @@ load_dotenv()
 BASE_URL = "https://intervals.icu/api/v1"
 API_KEY = os.getenv("INTERVALS_API_KEY")
 
+RECOVERY_CHECKIN_FIELDS = {
+    "sleep_hours": "AthleteOSReportedSleepHours",
+    "sleep_quality": "AthleteOSReportedSleepQuality",
+    "fatigue": "AthleteOSReportedFatigue",
+    "soreness": "AthleteOSReportedSoreness",
+    "stress": "AthleteOSReportedStress",
+    "mood": "AthleteOSReportedMood",
+    "motivation": "AthleteOSReportedMotivation",
+}
+RECOVERY_CHECKIN_ENCODINGS = {
+    "sleep_quality": {
+        "none": 0,
+        "poor": 1,
+        "average": 2,
+        "good": 3,
+        "excellent": 4,
+    },
+    "fatigue": {
+        "none": 0,
+        "low": 1,
+        "average": 2,
+        "high": 3,
+        "extreme": 4,
+    },
+    "soreness": {
+        "none": 0,
+        "low": 1,
+        "average": 2,
+        "high": 3,
+        "extreme": 4,
+    },
+    "stress": {
+        "none": 0,
+        "low": 1,
+        "average": 2,
+        "high": 3,
+        "extreme": 4,
+    },
+    "mood": {
+        "poor": 1,
+        "average": 2,
+        "good": 3,
+        "excellent": 4,
+    },
+    "motivation": {
+        "none": 0,
+        "poor": 1,
+        "average": 2,
+        "good": 3,
+        "excellent": 4,
+    },
+}
+
 
 def get_activities(oldest: date, newest: date):
     if not API_KEY:
@@ -151,3 +204,36 @@ def get_recent_wellness_normalized(days: int = 7) -> list[dict]:
     oldest = newest - timedelta(days=days - 1)
 
     return get_wellness_normalized(oldest, newest)
+
+
+def encode_recovery_checkin(fields: dict) -> dict:
+    """Encode canonical recovery fields for Intervals.icu custom fields."""
+
+    encoded = {}
+    for field, value in fields.items():
+        provider_field = RECOVERY_CHECKIN_FIELDS[field]
+        if field == "sleep_hours":
+            encoded[provider_field] = value
+        else:
+            encoded[provider_field] = RECOVERY_CHECKIN_ENCODINGS[field][value]
+    return encoded
+
+
+def update_wellness(date_value: date, fields: dict) -> dict:
+    """Partially update one Intervals.icu wellness record."""
+
+    if not API_KEY:
+        raise RuntimeError("INTERVALS_API_KEY is not set")
+
+    response = httpx.put(
+        f"{BASE_URL}/athlete/0/wellness/{date_value.isoformat()}",
+        json=fields,
+        auth=("API_KEY", API_KEY),
+        timeout=30.0,
+    )
+    response.raise_for_status()
+
+    try:
+        return response.json()
+    except ValueError:
+        return {}
