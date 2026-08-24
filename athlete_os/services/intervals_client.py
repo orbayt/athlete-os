@@ -61,6 +61,10 @@ RECOVERY_CHECKIN_ENCODINGS = {
         "excellent": 4,
     },
 }
+RECOVERY_CHECKIN_DECODINGS = {
+    field: {score: label for label, score in encoding.items()}
+    for field, encoding in RECOVERY_CHECKIN_ENCODINGS.items()
+}
 
 
 def get_activities(oldest: date, newest: date):
@@ -173,6 +177,27 @@ def normalize_wellness(wellness: dict) -> dict:
             else None
         ),
         "sleep_score": wellness.get("sleepScore"),
+        "reported_sleep_hours": wellness.get(
+            RECOVERY_CHECKIN_FIELDS["sleep_hours"]
+        ),
+        "reported_sleep_quality": RECOVERY_CHECKIN_DECODINGS[
+            "sleep_quality"
+        ].get(wellness.get(RECOVERY_CHECKIN_FIELDS["sleep_quality"])),
+        "reported_fatigue": RECOVERY_CHECKIN_DECODINGS["fatigue"].get(
+            wellness.get(RECOVERY_CHECKIN_FIELDS["fatigue"])
+        ),
+        "reported_soreness": RECOVERY_CHECKIN_DECODINGS["soreness"].get(
+            wellness.get(RECOVERY_CHECKIN_FIELDS["soreness"])
+        ),
+        "reported_stress": RECOVERY_CHECKIN_DECODINGS["stress"].get(
+            wellness.get(RECOVERY_CHECKIN_FIELDS["stress"])
+        ),
+        "reported_mood": RECOVERY_CHECKIN_DECODINGS["mood"].get(
+            wellness.get(RECOVERY_CHECKIN_FIELDS["mood"])
+        ),
+        "reported_motivation": RECOVERY_CHECKIN_DECODINGS[
+            "motivation"
+        ].get(wellness.get(RECOVERY_CHECKIN_FIELDS["motivation"])),
         "steps": wellness.get("steps"),
         "weight_kg": weight,
         "readiness": wellness.get("readiness"),
