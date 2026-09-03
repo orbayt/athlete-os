@@ -61,6 +61,51 @@ class WellnessNormalizationTests(unittest.TestCase):
 
 
 class RecoveryContextTests(unittest.TestCase):
+    def test_resting_hr_without_sleep_has_unknown_measurement_context(self):
+        result = build_recovery_context(
+            [wellness(0, resting_hr=63, sleep_hours=None)], AS_OF
+        )
+        resting_hr = result["objective"]["resting_hr"]
+
+        self.assertEqual(
+            resting_hr["latest"],
+            {
+                "date": "2026-08-24",
+                "value": 63,
+                "measurement_context": "overnight_unknown",
+            },
+        )
+        self.assertEqual(
+            resting_hr["recent_7d"]["measurement_context"],
+            {
+                "overnight_supported_days": 0,
+                "overnight_unknown_days": 1,
+                "comparability": "consistent_unknown",
+            },
+        )
+
+    def test_mixed_rhr_context_preserves_existing_mean_and_coverage(self):
+        result = build_recovery_context(
+            [
+                wellness(0, resting_hr=63, sleep_hours=None),
+                wellness(1, resting_hr=59, sleep_hours=7.25),
+            ],
+            AS_OF,
+        )
+        recent = result["objective"]["resting_hr"]["recent_7d"]
+
+        self.assertEqual(recent["mean"], 61)
+        self.assertEqual(recent["observed_days"], 2)
+        self.assertEqual(recent["coverage_pct"], 28.6)
+        self.assertEqual(
+            recent["measurement_context"],
+            {
+                "overnight_supported_days": 1,
+                "overnight_unknown_days": 1,
+                "comparability": "mixed",
+            },
+        )
+
     def test_objective_metrics_use_observations_without_zero_fill(self):
         records = [
             wellness(0, resting_hr=66, hrv_rmssd=64, sleep_hours=7, sleep_score=80),
@@ -73,12 +118,35 @@ class RecoveryContextTests(unittest.TestCase):
         result = build_recovery_context(records, AS_OF)
         resting_hr = result["objective"]["resting_hr"]
 
-        self.assertEqual(resting_hr["latest"], {"date": "2026-08-24", "value": 66})
+        self.assertEqual(
+            resting_hr["latest"],
+            {
+                "date": "2026-08-24",
+                "value": 66,
+                "measurement_context": "overnight_supported",
+            },
+        )
         self.assertEqual(resting_hr["recent_7d"]["mean"], 63)
         self.assertEqual(resting_hr["recent_7d"]["observed_days"], 2)
         self.assertEqual(resting_hr["recent_7d"]["coverage_pct"], 28.6)
         self.assertEqual(resting_hr["background_42d"]["mean"], 57.5)
         self.assertEqual(resting_hr["background_42d"]["observed_days"], 4)
+        self.assertEqual(
+            resting_hr["recent_7d"]["measurement_context"],
+            {
+                "overnight_supported_days": 2,
+                "overnight_unknown_days": 0,
+                "comparability": "consistent_overnight_supported",
+            },
+        )
+        self.assertEqual(
+            resting_hr["background_42d"]["measurement_context"],
+            {
+                "overnight_supported_days": 3,
+                "overnight_unknown_days": 1,
+                "comparability": "mixed",
+            },
+        )
 
         hrv = result["objective"]["hrv"]
         expected_ln = (log(64) + log(16)) / 2
@@ -180,6 +248,14 @@ class RecoveryContextTests(unittest.TestCase):
         self.assertIsNone(resting_hr["recent_7d"]["mean"])
         self.assertEqual(resting_hr["recent_7d"]["observed_days"], 0)
         self.assertEqual(resting_hr["recent_7d"]["coverage_pct"], 0)
+        self.assertEqual(
+            resting_hr["recent_7d"]["measurement_context"],
+            {
+                "overnight_supported_days": 0,
+                "overnight_unknown_days": 0,
+                "comparability": "no_data",
+            },
+        )
         self.assertIsNone(
             result["objective"]["hrv"]["background_42d"][
                 "geometric_mean_rmssd"

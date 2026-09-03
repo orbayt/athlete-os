@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Athlete OS</title>
+  <style>
+    :root { color-scheme: dark; --bg:#0b1210; --panel:#14201c; --line:#293a34; --text:#eff7f2; --muted:#9eb1a8; --accent:#79e09e; --danger:#ff9b91; }
+    * { box-sizing:border-box; }
+    body { margin:0; background:linear-gradient(145deg,#0b1210,#101b17); color:var(--text); font:15px/1.45 system-ui,sans-serif; }
+    main { width:min(1120px,calc(100% - 32px)); margin:0 auto; padding:40px 0 64px; }
+    header { display:flex; justify-content:space-between; align-items:end; gap:20px; margin-bottom:28px; }
+    nav { display:flex; align-items:center; gap:18px; } a { color:var(--accent); text-decoration:none; font-weight:650; }
+    h1 { margin:0; font-size:clamp(2rem,5vw,3.6rem); letter-spacing:-.05em; } h2 { margin:0 0 18px; font-size:1.1rem; } p { margin:0; }
+    .eyebrow,.date,.metric small,label { color:var(--muted); } .eyebrow { text-transform:uppercase; letter-spacing:.14em; font-size:.75rem; }
+    .grid { display:grid; grid-template-columns:repeat(12,1fr); gap:16px; }
+    .card { grid-column:span 6; padding:22px; background:rgba(20,32,28,.94); border:1px solid var(--line); border-radius:18px; }
+    .wide { grid-column:1/-1; } .metrics { display:grid; grid-template-columns:repeat(3,1fr); gap:10px; }
+    .metric { min-width:0; padding:14px; background:#0e1814; border-radius:12px; } .metric strong { display:block; margin-top:5px; font-size:1.35rem; overflow-wrap:anywhere; }
+    .metric small { display:block; } .note { color:var(--muted); font-style:italic; }
+    .alert { margin:0 0 16px; padding:12px 16px; border-radius:10px; background:#25342e; } .alert.error { color:var(--danger); border:1px solid #69423e; }
+    form { display:grid; grid-template-columns:repeat(4,1fr); gap:14px; } .field { display:flex; flex-direction:column; gap:6px; } .field.wide { grid-column:span 2; }
+    input,select,textarea,button { width:100%; border:1px solid var(--line); border-radius:9px; padding:10px 12px; background:#0d1713; color:var(--text); font:inherit; }
+    textarea { min-height:140px; resize:vertical; } button { align-self:end; cursor:pointer; border:0; background:var(--accent); color:#092012; font-weight:750; }
+    fieldset { grid-column:1/-1; margin:0; padding:0; border:0; } legend { margin-bottom:8px; color:var(--muted); } .tags { display:flex; flex-wrap:wrap; gap:8px; } .tag-option { display:flex; align-items:center; gap:7px; padding:8px 11px; border:1px solid var(--line); border-radius:999px; background:#0d1713; color:var(--text); cursor:pointer; } .tag-option input { width:auto; margin:0; accent-color:var(--accent); }
+    @media (max-width:760px) { main { width:min(100% - 20px,1120px); padding-top:24px; } header { align-items:start; flex-direction:column; } .card { grid-column:1/-1; } .metrics { grid-template-columns:repeat(2,1fr); } form { grid-template-columns:repeat(2,1fr); } }
+    @media (max-width:440px) { .metrics,form { grid-template-columns:1fr; } .field.wide { grid-column:auto; } }
+  </style>
+</head>
+<body><main>
+  <header><div><div class="eyebrow">Daily overview</div><h1>Athlete OS</h1></div><nav><a href="/history">History</a><p class="date">{{ today }}</p></nav></header>
+  {% if message %}<div class="alert">{{ message }}</div>{% endif %}
+  {% if error %}<div class="alert error">{{ error }}</div>{% endif %}
+  {% for provider_error in provider_errors %}<div class="alert error">{{ provider_error }}</div>{% endfor %}
+
+  <div class="grid">
+    <section class="card"><h2>Training State</h2>
+      {% if training %}{% set recent = training.load.recent.observed_value %}{% set background = training.load.background.observed_value %}
+      <div class="metrics">
+        <div class="metric"><small>Recent EWMA load</small><strong>{{ recent }}</strong></div>
+        <div class="metric"><small>Background EWMA load</small><strong>{{ background }}</strong></div>
+        <div class="metric"><small>Recent − background</small><strong>{{ (recent - background)|round(2) }}</strong></div>
+        <div class="metric"><small>7d training load</small><strong>{{ training.load.totals['7d'] }}</strong></div>
+        <div class="metric"><small>28d training load</small><strong>{{ training.load.totals['28d'] }}</strong></div>
+        <div class="metric"><small>Activities · past 210 days</small><strong>{{ training.data_coverage.activity_count }}</strong></div>
+        <div class="metric"><small>Training load coverage</small><strong>{{ 'Complete' if training.load.recent.recent_window_complete else 'Incomplete' }}</strong></div>
+      </div>{% else %}<p class="note">Training data is currently unavailable.</p>{% endif %}
+    </section>
+
+    <section class="card"><h2>Recovery</h2>
+      {% if recovery %}{% set resting = recovery.objective.resting_hr.latest %}{% set hrv = recovery.objective.hrv.latest %}{% set sleep = recovery.objective.sleep.duration_hours.latest %}{% set manual_sleep = recovery.subjective.sleep_duration_hours.latest %}
+      <div class="metrics">
+        <div class="metric"><small>Resting HR</small><strong>{{ resting.value if resting else '—' }}</strong><small>{{ resting.date if resting else 'No measurement' }}</small>{% if recovery.objective.resting_hr.recent_7d.measurement_context.comparability == 'mixed' %}<small>Mixed overnight wear context</small>{% endif %}</div>
+        <div class="metric"><small>HRV RMSSD</small><strong>{{ hrv.rmssd_ms if hrv else '—' }}</strong><small>{{ hrv.date if hrv else 'No measurement' }}</small></div>
+        <div class="metric"><small>Objective sleep</small><strong>{{ (sleep.value ~ ' h') if sleep else '—' }}</strong><small>{{ sleep.date if sleep else 'No measurement' }}</small></div>
+        <div class="metric"><small>Manually reported sleep</small><strong>{{ (manual_sleep.value ~ ' h') if manual_sleep else '—' }}</strong><small>{{ manual_sleep.date if manual_sleep else 'No report' }}</small></div>
+      </div>{% else %}<p class="note">Recovery data is currently unavailable.</p>{% endif %}
+    </section>
+
+    <section class="card"><h2>Subjective state</h2>
+      {% if recovery %}<div class="metrics">
+        {% for label, key in [('Sleep quality','sleep_quality'),('Fatigue','fatigue'),('Soreness','soreness'),('Stress','stress'),('Mood','mood'),('Motivation','motivation')] %}{% set latest = recovery.subjective[key].latest %}
+        <div class="metric"><small>{{ label }}</small><strong>{{ latest.label|title if latest else '—' }}</strong><small>{{ latest.date if latest else 'No report' }}</small></div>{% endfor %}
+      </div>{% else %}<p class="note">Subjective data is currently unavailable.</p>{% endif %}
+    </section>
+
+    <section class="card"><h2>Data coverage</h2>
+      {% if recovery %}<div class="metrics">
+        <div class="metric"><small>Objective sleep · 7d</small><strong>{{ recovery.objective.sleep.duration_hours.recent_7d.coverage_pct }}%</strong></div>
+        <div class="metric"><small>HRV · 7d</small><strong>{{ recovery.objective.hrv.recent_7d.coverage_pct }}%</strong></div>
+        <div class="metric"><small>Subjective fatigue · 7d</small><strong>{{ recovery.subjective.fatigue.recent_7d.coverage_pct }}%</strong></div>
+      </div>{% else %}<p class="note">Coverage is currently unavailable.</p>{% endif %}
+    </section>
+
+    <section class="card wide"><h2>Context</h2>{% set note = recovery.contextual.context_notes.latest if recovery else none %}<p class="note">{% if note %}{{ note.text }} — {{ note.date }}{% else %}No context note recorded.{% endif %}</p></section>
+
+    <section class="card wide"><h2>Daily check-in</h2>
+      <form method="post" action="/checkin">
+        <div class="field"><label for="date">Date</label><input id="date" name="date" type="date" value="{{ today }}" max="{{ today }}" required></div>
+        <div class="field"><label for="sleep_hours">Sleep hours</label><input id="sleep_hours" name="sleep_hours" type="number" min="0" max="24" step="0.1" placeholder="Optional"></div>
+        {% set choices = {'sleep_quality':['none','poor','average','good','excellent'],'fatigue':['none','low','average','high','extreme'],'soreness':['none','low','average','high','extreme'],'stress':['none','low','average','high','extreme'],'mood':['poor','average','good','excellent'],'motivation':['none','poor','average','good','excellent']} %}
+        {% for field, options in choices.items() %}<div class="field"><label for="{{ field }}">{{ field|replace('_',' ')|title }}</label><select id="{{ field }}" name="{{ field }}"><option value="">Not reported</option>{% for option in options %}<option value="{{ option }}">{{ option|title }}</option>{% endfor %}</select></div>{% endfor %}
+        <fieldset><legend>Life context (optional)</legend><div class="tags">
+          {% set context_tags = [('travel','Travel'),('illness','Illness'),('injury_niggle','Injury / niggle'),('work_stress','Work stress'),('family_load','Family load'),('environmental_stress','Environmental stress'),('sleep_disruption','Sleep disruption'),('alcohol','Alcohol / hangover'),('unusual_time_on_feet','Unusual time on feet')] %}
+          {% for value, label in context_tags %}<label class="tag-option"><input type="checkbox" data-context-tag value="{{ value }}">{{ label }}</label>{% endfor %}
+          <input type="hidden" id="context_tags" name="context_tags" value="">
+        </div></fieldset>
+        <div class="field wide"><label for="journal_text">Tell Athlete OS about your day</label><textarea id="journal_text" name="journal_text" placeholder="Work, family, travel, health, weather, sleep disruption, training — anything that changed the real load of the day."></textarea></div>
+        <div class="field"><button type="submit">Save check-in</button></div>
+      </form>
+    </section>
+  </div>
+</main><script>
+  const contextTagField = document.querySelector('#context_tags');
+  document.querySelectorAll('[data-context-tag]').forEach((checkbox) => {
+    checkbox.addEventListener('change', () => {
+      contextTagField.value = [...document.querySelectorAll('[data-context-tag]:checked')]
+        .map((item) => item.value).join(',');
+    });
+  });
+</script></body></html>

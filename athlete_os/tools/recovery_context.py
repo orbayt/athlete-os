@@ -125,6 +125,53 @@ def _numeric_metric(
     }
 
 
+def _rhr_measurement_context(
+    records_by_date: dict[date, dict], as_of: date, window_days: int
+) -> dict:
+    rhr_records = [
+        record
+        for _, record in _window_records(records_by_date, as_of, window_days)
+        if record.get("resting_hr") is not None
+    ]
+    supported_days = sum(
+        record.get("sleep_hours") is not None for record in rhr_records
+    )
+    unknown_days = len(rhr_records) - supported_days
+
+    if not rhr_records:
+        comparability = "no_data"
+    elif supported_days == len(rhr_records):
+        comparability = "consistent_overnight_supported"
+    elif unknown_days == len(rhr_records):
+        comparability = "consistent_unknown"
+    else:
+        comparability = "mixed"
+
+    return {
+        "overnight_supported_days": supported_days,
+        "overnight_unknown_days": unknown_days,
+        "comparability": comparability,
+    }
+
+
+def _resting_hr_metric(records_by_date: dict[date, dict], as_of: date) -> dict:
+    metric = _numeric_metric(records_by_date, as_of, "resting_hr")
+    if metric["latest"] is not None:
+        latest_date = date.fromisoformat(metric["latest"]["date"])
+        metric["latest"]["measurement_context"] = (
+            "overnight_supported"
+            if records_by_date[latest_date].get("sleep_hours") is not None
+            else "overnight_unknown"
+        )
+    metric["recent_7d"]["measurement_context"] = _rhr_measurement_context(
+        records_by_date, as_of, RECENT_DAYS
+    )
+    metric["background_42d"]["measurement_context"] = (
+        _rhr_measurement_context(records_by_date, as_of, BACKGROUND_DAYS)
+    )
+    return metric
+
+
 def _hrv_window(
     records_by_date: dict[date, dict], as_of: date, window_days: int
 ) -> dict:
@@ -276,9 +323,7 @@ def build_recovery_context(wellness: list[dict], as_of: date) -> dict:
             },
         },
         "objective": {
-            "resting_hr": _numeric_metric(
-                records_by_date, as_of, "resting_hr"
-            ),
+            "resting_hr": _resting_hr_metric(records_by_date, as_of),
             "hrv": _hrv_metric(records_by_date, as_of),
             "sleep": {
                 "duration_hours": _numeric_metric(
