@@ -230,8 +230,22 @@ def _constraints(
         for context in entry.get("context", []):
             constraint_type = tag_types.get(context["tag"])
             if constraint_type:
+                impact = context.get("injury_impact")
+                trend = context.get("injury_trend")
+                severity = {
+                    "training_only": "low",
+                    "daily_noticeable": "moderate",
+                    "daily_limiting": "high",
+                }.get(impact, "low")
                 candidates.append(
-                    (constraint_type, context["tag"].replace("_", " "), status, "low")
+                    (
+                        constraint_type,
+                        context["tag"].replace("_", " "),
+                        status,
+                        severity,
+                        impact,
+                        trend,
+                    )
                 )
 
     for field, constraint_type, detail in (
@@ -244,14 +258,17 @@ def _constraints(
         status = _constraint_status(measured, as_of)
         if status:
             severity = "high" if latest["label"] == "extreme" else "moderate"
-            candidates.append((constraint_type, detail, status, severity))
+            candidates.append((constraint_type, detail, status, severity, None, None))
 
     # One constraint per type: prefer active, then higher severity.
     status_rank = {"active": 2, "resolving": 1}
     severity_rank = {"low": 0, "moderate": 1, "high": 2}
     merged = {}
-    for constraint_type, detail, status, severity in candidates:
-        candidate = (status_rank[status], severity_rank[severity], detail, status, severity)
+    for constraint_type, detail, status, severity, impact, trend in candidates:
+        candidate = (
+            status_rank[status], severity_rank[severity], detail, status,
+            severity, impact, trend,
+        )
         if constraint_type not in merged or candidate[:2] > merged[constraint_type][:2]:
             merged[constraint_type] = candidate
     return [
@@ -260,6 +277,8 @@ def _constraints(
             detail=values[2].capitalize(),
             status=values[3],
             severity=values[4],
+            injury_impact=values[5],
+            injury_trend=values[6],
         )
         for constraint_type, values in sorted(merged.items())
     ]

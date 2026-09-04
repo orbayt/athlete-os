@@ -143,6 +143,43 @@ class JournalStoreTests(unittest.TestCase):
         self.assertTrue(all(context["confirmed"] for context in contexts))
         self.assertTrue(all(context["confidence"] is None for context in contexts))
 
+    def test_injury_context_is_persisted_and_cleared_with_tag(self):
+        replace_manual_context(
+            self.day,
+            ["injury_niggle"],
+            injury_impact="daily_noticeable",
+            injury_trend="better",
+        )
+
+        injury = journal_history()[self.day]["context"][0]
+        self.assertEqual(injury["injury_impact"], "daily_noticeable")
+        self.assertEqual(injury["injury_trend"], "better")
+
+        replace_manual_context(
+            self.day, ["travel"], injury_impact="daily_limiting", injury_trend="worse"
+        )
+        context = journal_history()[self.day]["context"][0]
+        self.assertEqual(context["tag"], "travel")
+        self.assertIsNone(context["injury_impact"])
+        self.assertIsNone(context["injury_trend"])
+
+    def test_existing_context_table_gains_injury_columns(self):
+        with closing(sqlite3.connect(self.db_path)) as connection:
+            connection.execute(
+                """CREATE TABLE daily_context (
+                    date TEXT NOT NULL, tag TEXT NOT NULL, source TEXT NOT NULL,
+                    confidence REAL NULL, confirmed INTEGER NOT NULL DEFAULT 0,
+                    created_at TEXT NOT NULL, PRIMARY KEY (date, tag, source)
+                )"""
+            )
+            connection.commit()
+
+        replace_manual_context(self.day, ["injury_niggle"])
+
+        with closing(sqlite3.connect(self.db_path)) as connection:
+            columns = {row[1] for row in connection.execute("PRAGMA table_info(daily_context)")}
+        self.assertTrue({"injury_impact", "injury_trend"} <= columns)
+
     def test_manual_context_tags_can_be_replaced_without_touching_ai(self):
         replace_manual_context(self.day, ["travel", "work_stress"])
         with closing(sqlite3.connect(self.db_path)) as connection:

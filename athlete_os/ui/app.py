@@ -74,6 +74,20 @@ def _has_recovery_values(values: dict) -> bool:
     return any(value is not None for value in values.values())
 
 
+def _save_manual_context(
+    date_value: str, tags: list[str], injury_impact: str, injury_trend: str
+) -> None:
+    if "injury_niggle" not in tags:
+        replace_manual_context(date_value, tags)
+        return
+    replace_manual_context(
+        date_value,
+        tags,
+        injury_impact=_optional_text(injury_impact),
+        injury_trend=_optional_text(injury_trend),
+    )
+
+
 @app.get("/")
 def dashboard(request: Request, message: str | None = None, error: str | None = None):
     today = date.today()
@@ -120,6 +134,8 @@ def _save_checkin(submitted: dict[str, list[str]]) -> RedirectResponse:
     motivation = field("motivation")
     journal_text = field("journal_text")
     context_tags = field("context_tags")
+    injury_impact = field("injury_impact")
+    injury_trend = field("injury_trend")
     local_saved = False
     recovery_saved = False
     try:
@@ -145,7 +161,12 @@ def _save_checkin(submitted: dict[str, list[str]]) -> RedirectResponse:
                 recovery_values["date_value"] = normalized_date
             if normalized_journal is not None:
                 save_daily_journal(normalized_date, normalized_journal)
-            replace_manual_context(normalized_date, validated_tags)
+            _save_manual_context(
+                normalized_date,
+                validated_tags,
+                injury_impact,
+                injury_trend,
+            )
             local_saved = True
 
         if _has_recovery_values(
@@ -272,7 +293,12 @@ def _save_history_edit(submitted: dict[str, list[str]]) -> RedirectResponse:
             delete_daily_journal(date_value)
         else:
             save_daily_journal(date_value, journal)
-        replace_manual_context(date_value, tags)
+        _save_manual_context(
+            date_value,
+            tags,
+            field("injury_impact"),
+            field("injury_trend"),
+        )
         local_saved = True
 
         recovery_fields = {

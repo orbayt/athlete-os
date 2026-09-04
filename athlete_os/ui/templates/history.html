@@ -16,6 +16,7 @@
     .tags { display:flex; flex-wrap:wrap; gap:7px; margin:12px 0; } .tag { padding:5px 9px; color:var(--accent); border:1px solid #376348; border-radius:999px; font-size:.82rem; }
     blockquote { margin:12px 0 0; padding:13px 15px; white-space:pre-wrap; background:#0e1814; border-left:3px solid var(--accent); border-radius:0 9px 9px 0; } .empty { color:var(--muted); font-style:italic; }
     .edit-link { color:var(--muted); font-size:.85rem; } form { margin-top:18px; padding-top:18px; border-top:1px solid var(--line); } .form-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:12px; } label,legend { color:var(--muted); font-size:.86rem; } .field { display:flex; flex-direction:column; gap:5px; } .wide { grid-column:1/-1; } input,select,textarea,button { width:100%; padding:9px 11px; color:var(--text); background:#0d1713; border:1px solid var(--line); border-radius:8px; font:inherit; } textarea { min-height:120px; resize:vertical; } fieldset { margin:14px 0; padding:0; border:0; } .tag-options { display:flex; flex-wrap:wrap; gap:7px; margin-top:8px; } .tag-option { display:flex; align-items:center; gap:6px; padding:6px 9px; color:var(--text); background:#0d1713; border:1px solid var(--line); border-radius:999px; } .tag-option input { width:auto; } .actions { display:flex; align-items:center; gap:14px; } button { width:auto; cursor:pointer; color:#092012; background:var(--accent); border:0; font-weight:700; }
+    .injury-context { display:grid; grid-template-columns:repeat(2,1fr); gap:12px; margin:12px 0; padding:12px; border:1px solid var(--line); border-radius:10px; } .injury-context[hidden] { display:none; }
     @media(max-width:620px) { main { width:calc(100% - 20px); padding-top:24px; } header { align-items:start; flex-direction:column; } .signals { grid-template-columns:repeat(2,1fr); } }
   </style>
 </head>
@@ -43,7 +44,7 @@
     {% if entry.context %}<div class="tags">{% for context in entry.context %}<span class="tag">{{ context_tag_labels.get(context.tag, context.tag|replace('_',' ')|title) }}</span>{% endfor %}</div>{% endif %}
     {% if not entry.is_editing %}{% if entry.journal_text %}<blockquote>{{ entry.journal_text }}</blockquote>
     {% elif not w and not entry.context %}<p class="empty">No data recorded.</p>{% endif %}{% endif %}
-    {% if entry.is_editing %}{% set manual_tags = entry.context|selectattr('source','equalto','manual')|map(attribute='tag')|list %}
+    {% if entry.is_editing %}{% set manual_tags = entry.context|selectattr('source','equalto','manual')|map(attribute='tag')|list %}{% set injury = entry.context|selectattr('source','equalto','manual')|selectattr('tag','equalto','injury_niggle')|first %}
     <form method="post" action="/history/edit">
       <input type="hidden" name="date" value="{{ entry.date }}"><input type="hidden" name="days" value="{{ days }}">
       <div class="form-grid">
@@ -52,8 +53,24 @@
         {% for field, config in choices.items() %}{% set current = w[config[0]] if w and config[0] in w else none %}<div class="field"><label for="{{ field }}-{{ entry.date }}">{{ field|replace('reported_','')|replace('_',' ')|title }}</label><select id="{{ field }}-{{ entry.date }}" name="{{ field }}"><option value="">Not reported</option>{% for option in config[1] %}<option value="{{ option }}" {{ 'selected' if current == option else '' }}>{{ option|title }}</option>{% endfor %}</select></div>{% endfor %}
         <div class="field wide"><label for="journal_text-{{ entry.date }}">Journal</label><textarea id="journal_text-{{ entry.date }}" name="journal_text">{{ entry.journal_text or '' }}</textarea></div>
       </div>
-      <fieldset><legend>Context tags</legend><div class="tag-options">{% for tag, label in context_tag_labels.items() %}<label class="tag-option"><input type="checkbox" name="context_tags" value="{{ tag }}" {{ 'checked' if tag in manual_tags else '' }}>{{ label }}</label>{% endfor %}</div></fieldset>
+      <fieldset><legend>Context tags</legend><div class="tag-options">{% for tag, label in context_tag_labels.items() %}<label class="tag-option"><input type="checkbox" name="context_tags" value="{{ tag }}" {{ 'checked' if tag in manual_tags else '' }} data-history-context-tag>{{ label }}</label>{% endfor %}</div></fieldset>
+      <div class="injury-context" data-history-injury-context {{ 'hidden' if 'injury_niggle' not in manual_tags else '' }}>
+        <div class="field"><label for="injury-impact-{{ entry.date }}">How is it affecting movement?</label><select id="injury-impact-{{ entry.date }}" name="injury_impact"><option value="">Not reported</option>{% for value, label in [('training_only','Only noticeable during training'),('daily_noticeable','Noticeable during normal daily movement'),('daily_limiting','Limiting normal daily movement')] %}<option value="{{ value }}" {{ 'selected' if injury and injury.injury_impact == value else '' }}>{{ label }}</option>{% endfor %}</select></div>
+        <div class="field"><label for="injury-trend-{{ entry.date }}">Compared with yesterday</label><select id="injury-trend-{{ entry.date }}" name="injury_trend"><option value="">Not reported</option>{% for value in ['better','same','worse'] %}<option value="{{ value }}" {{ 'selected' if injury and injury.injury_trend == value else '' }}>{{ value|title }}</option>{% endfor %}</select></div>
+      </div>
       <div class="actions"><button type="submit">Save</button><a href="/history?days={{ days }}#day-{{ entry.date }}">Cancel</a></div>
     </form>{% endif %}
   </article>{% endfor %}
-</main></body></html>
+</main><script>
+  const injuryTag = document.querySelector('[data-history-context-tag][value="injury_niggle"]');
+  const injuryContext = document.querySelector('[data-history-injury-context]');
+  if (injuryTag && injuryContext) {
+    const injuryFields = injuryContext.querySelectorAll('select');
+    const syncInjury = () => {
+      injuryContext.hidden = !injuryTag.checked;
+      injuryFields.forEach((field) => { field.disabled = !injuryTag.checked; if (!injuryTag.checked) field.value = ''; });
+    };
+    injuryTag.addEventListener('change', syncInjury);
+    syncInjury();
+  }
+</script></body></html>

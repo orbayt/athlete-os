@@ -73,7 +73,11 @@ class UiTests(unittest.TestCase):
         self.assertIn("Test the system, not train it.", body)
         self.assertIn("Symptoms during activity.", body)
         self.assertIn("Progress only if symptoms do not worsen.", body)
-        self.assertIn("Confidence: High", body)
+        self.assertNotIn("Confidence:", body)
+        details = body.split("Why this recommendation?", 1)[1].split(
+            "</details>", 1
+        )[0]
+        self.assertIn("An injury constraint is active.", details)
         self.assertNotIn("readiness score", body.lower())
 
     @patch(
@@ -202,6 +206,21 @@ class UiTests(unittest.TestCase):
         replace_context.assert_called_once_with("2026-09-02", ["family_load"])
         record.assert_not_called()
 
+    @patch("athlete_os.ui.app.replace_manual_context")
+    def test_checkin_passes_structured_injury_context(self, replace_context):
+        response = _save_checkin(form_data({
+            "date": "2026-09-02",
+            "context_tags": "injury_niggle",
+            "injury_impact": "daily_noticeable",
+            "injury_trend": "better",
+        }))
+
+        self.assertEqual(response.status_code, 303)
+        replace_context.assert_called_once_with(
+            "2026-09-02", ["injury_niggle"],
+            injury_impact="daily_noticeable", injury_trend="better",
+        )
+
     @patch("athlete_os.ui.app.get_recent_wellness_normalized")
     @patch("athlete_os.ui.app.journal_history")
     def test_history_renders_migrated_journal_without_legacy_ui(
@@ -273,6 +292,12 @@ class UiTests(unittest.TestCase):
                 "journal_text": "Canonical journal",
                 "context": [
                     {"tag": "travel", "source": "manual"},
+                    {
+                        "tag": "injury_niggle",
+                        "source": "manual",
+                        "injury_impact": "daily_noticeable",
+                        "injury_trend": "better",
+                    },
                     {"tag": "event_support", "source": "manual"},
                 ],
             }
@@ -306,6 +331,9 @@ class UiTests(unittest.TestCase):
         self.assertIn('value="high" selected', form)
         self.assertIn("Canonical journal", form)
         self.assertIn('value="travel" checked', form)
+        self.assertIn('value="daily_noticeable" selected', form)
+        self.assertIn('value="better" selected', form)
+        self.assertIn("How is it affecting movement?", form)
         for label in (
             "Travel",
             "Illness",

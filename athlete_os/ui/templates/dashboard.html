@@ -35,6 +35,8 @@
     input,select,textarea,button { width:100%; border:1px solid var(--line); border-radius:9px; padding:10px 12px; background:#0d1713; color:var(--text); font:inherit; }
     textarea { min-height:140px; resize:vertical; } button { align-self:end; cursor:pointer; border:0; background:var(--accent); color:#092012; font-weight:750; }
     fieldset { grid-column:1/-1; margin:0; padding:0; border:0; } legend { margin-bottom:8px; color:var(--muted); } .tags { display:flex; flex-wrap:wrap; gap:8px; } .tag-option { display:flex; align-items:center; gap:7px; padding:8px 11px; border:1px solid var(--line); border-radius:999px; background:#0d1713; color:var(--text); cursor:pointer; } .tag-option input { width:auto; margin:0; accent-color:var(--accent); }
+    .injury-context { grid-column:1/-1; display:grid; grid-template-columns:repeat(2,1fr); gap:14px; padding:14px; border:1px solid var(--line); border-radius:12px; }
+    .injury-context[hidden] { display:none; }
     @media (max-width:760px) { main { width:min(100% - 20px,1120px); padding-top:24px; } header { align-items:start; flex-direction:column; } .card { grid-column:1/-1; } .metrics { grid-template-columns:repeat(2,1fr); } .coach-followup { grid-template-columns:1fr; } form { grid-template-columns:repeat(2,1fr); } }
     @media (max-width:440px) { .metrics,form { grid-template-columns:1fr; } .field.wide { grid-column:auto; } }
   </style>
@@ -56,7 +58,6 @@
         <div><h3>WATCH</h3><ul>{% for item in head_coach.watch_for %}<li>{{ item }}</li>{% endfor %}</ul></div>
         <div><h3>NEXT</h3><p>{{ head_coach.next_decision }}</p></div>
       </div>
-      <p class="coach-confidence">Confidence: {{ head_coach.confidence|title }}</p>
       <details><summary>Why this recommendation?</summary><ul>{% for reason in head_coach.why %}<li>{{ reason }}</li>{% endfor %}</ul></details>
       {% else %}<p class="note">Head Coach assessment unavailable.</p>{% endif %}
     </section>
@@ -112,6 +113,10 @@
           {% for value, label in context_tags %}<label class="tag-option"><input type="checkbox" data-context-tag value="{{ value }}">{{ label }}</label>{% endfor %}
           <input type="hidden" id="context_tags" name="context_tags" value="">
         </div></fieldset>
+        <div class="injury-context" id="injury-context" hidden>
+          <div class="field"><label for="injury_impact">How is it affecting movement?</label><select id="injury_impact" name="injury_impact"><option value="">Not reported</option><option value="training_only">Only noticeable during training</option><option value="daily_noticeable">Noticeable during normal daily movement</option><option value="daily_limiting">Limiting normal daily movement</option></select></div>
+          <div class="field"><label for="injury_trend">Compared with yesterday</label><select id="injury_trend" name="injury_trend"><option value="">Not reported</option><option value="better">Better</option><option value="same">Same</option><option value="worse">Worse</option></select></div>
+        </div>
         <div class="field wide"><label for="journal_text">Tell Athlete OS about your day</label><textarea id="journal_text" name="journal_text" placeholder="Work, family, travel, health, weather, sleep disruption, training — anything that changed the real load of the day."></textarea></div>
         <div class="field"><button type="submit">Save check-in</button></div>
       </form>
@@ -119,10 +124,16 @@
   </div>
 </main><script>
   const contextTagField = document.querySelector('#context_tags');
+  const injuryContext = document.querySelector('#injury-context');
+  const injuryFields = injuryContext.querySelectorAll('select');
   document.querySelectorAll('[data-context-tag]').forEach((checkbox) => {
     checkbox.addEventListener('change', () => {
       contextTagField.value = [...document.querySelectorAll('[data-context-tag]:checked')]
         .map((item) => item.value).join(',');
+      const injurySelected = document.querySelector('[data-context-tag][value="injury_niggle"]').checked;
+      injuryContext.hidden = !injurySelected;
+      injuryFields.forEach((field) => { field.disabled = !injurySelected; if (!injurySelected) field.value = ''; });
     });
   });
+  injuryFields.forEach((field) => { field.disabled = true; });
 </script></body></html>

@@ -106,6 +106,14 @@ def _latest_subjective(metric: dict) -> dict | None:
     return {"date": latest["date"], "value": latest["label"]}
 
 
+def _context_value(context: dict) -> dict:
+    value = {"tag": context["tag"], "source": context["source"]}
+    for field in ("injury_impact", "injury_trend"):
+        if context.get(field) is not None:
+            value[field] = context[field]
+    return value
+
+
 def _timeline(
     as_of: date,
     activities: list[dict],
@@ -174,7 +182,7 @@ def _timeline(
                     "motivation": day_wellness.get("reported_motivation"),
                 },
                 "context_tags": [
-                    {"tag": context["tag"], "source": context["source"]}
+                    _context_value(context)
                     for context in local.get("context", [])
                 ],
                 "journal": local.get("journal_text"),
@@ -204,7 +212,7 @@ def athlete_context(as_of: str | None = None) -> dict:
     reported_sleep = subjective["sleep_duration_hours"]
 
     recent_tags = [
-        {"date": entry_date, "tag": item["tag"], "source": item["source"]}
+        {"date": entry_date, **_context_value(item)}
         for entry_date, entry in local_history.items()
         for item in entry.get("context", [])
     ]

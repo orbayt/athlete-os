@@ -28,6 +28,49 @@ def signals(**overrides):
 
 
 class HeadCoachTests(unittest.TestCase):
+    def injury(self, impact=None, trend=None):
+        return HeadCoachConstraint(
+            type="musculoskeletal",
+            detail="Back issue",
+            injury_impact=impact,
+            injury_trend=trend,
+        )
+
+    def test_training_only_injury_uses_test_load(self):
+        assessment = build_head_coach_assessment(
+            signals(constraints=[self.injury("training_only", "same")])
+        )
+        self.assertEqual(assessment.state, "test_load")
+
+    def test_daily_noticeable_injury_uses_non_running_active_recovery(self):
+        assessment = build_head_coach_assessment(
+            signals(constraints=[self.injury("daily_noticeable", "better")])
+        )
+        self.assertEqual(assessment.state, "active_recovery")
+        self.assertIn("No running today", assessment.session_guidance)
+        self.assertNotIn("jog-walk", assessment.session_guidance)
+        self.assertIn("walking, sitting, and standing", assessment.next_decision)
+        self.assertIn("normal daily movement", assessment.reality)
+
+    def test_daily_limiting_injury_rests(self):
+        assessment = build_head_coach_assessment(
+            signals(constraints=[self.injury("daily_limiting", "same")])
+        )
+        self.assertEqual(assessment.state, "rest")
+        self.assertIn("limiting normal daily movement", assessment.reality)
+        self.assertIn("clear improvement", assessment.next_decision)
+
+    def test_worsening_training_only_injury_uses_active_recovery(self):
+        assessment = build_head_coach_assessment(
+            signals(constraints=[self.injury("training_only", "worse")])
+        )
+        self.assertEqual(assessment.state, "active_recovery")
+
+    def test_worsening_daily_noticeable_injury_rests(self):
+        assessment = build_head_coach_assessment(
+            signals(constraints=[self.injury("daily_noticeable", "worse")])
+        )
+        self.assertEqual(assessment.state, "rest")
     def test_severe_active_constraint_requires_rest(self):
         assessment = build_head_coach_assessment(
             signals(

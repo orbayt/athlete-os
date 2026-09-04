@@ -16,6 +16,8 @@ ConstraintType = Literal[
 ]
 ConstraintStatus = Literal["active", "resolving", "resolved"]
 ConstraintSeverity = Literal["low", "moderate", "high"]
+InjuryImpact = Literal["training_only", "daily_noticeable", "daily_limiting"]
+InjuryTrend = Literal["better", "same", "worse"]
 AssessmentState = Literal[
     "rest", "active_recovery", "test_load", "easy", "normal"
 ]
@@ -29,6 +31,8 @@ class HeadCoachConstraint(BaseModel):
     detail: str
     status: ConstraintStatus = "active"
     severity: ConstraintSeverity = "low"
+    injury_impact: InjuryImpact | None = None
+    injury_trend: InjuryTrend | None = None
 
 
 class HeadCoachSignals(BaseModel):
@@ -85,6 +89,18 @@ def _choose_state(signals: HeadCoachSignals) -> AssessmentState:
         item.type == "musculoskeletal" for item in active
     )
 
+    musculoskeletal = [
+        item for item in constraints if item.type == "musculoskeletal"
+    ]
+
+    if any(item.injury_impact == "daily_limiting" for item in musculoskeletal):
+        return "rest"
+    if any(
+        item.injury_impact == "daily_noticeable"
+        and item.injury_trend == "worse"
+        for item in musculoskeletal
+    ):
+        return "rest"
     if any(item.severity == "high" for item in active):
         return "rest"
     if any(item.type == "illness" for item in active):
@@ -92,6 +108,15 @@ def _choose_state(signals: HeadCoachSignals) -> AssessmentState:
     if _systemic_strain(signals) and active_musculoskeletal:
         return "rest"
     if _systemic_strain(signals):
+        return "active_recovery"
+    if any(
+        item.injury_impact == "daily_noticeable"
+        or (
+            item.injury_impact == "training_only"
+            and item.injury_trend == "worse"
+        )
+        for item in musculoskeletal
+    ):
         return "active_recovery"
     if any(item.type == "musculoskeletal" for item in constraints):
         return "test_load"
@@ -123,10 +148,15 @@ def _confidence(signals: HeadCoachSignals) -> Confidence:
 
 
 def _constraint_reason(constraint: HeadCoachConstraint) -> str:
-    return (
+    reason = (
         f"{constraint.detail}: {constraint.status}, "
         f"{constraint.severity} severity."
     )
+    if constraint.injury_impact is not None:
+        reason += f" Movement impact: {constraint.injury_impact.replace('_', ' ')}."
+    if constraint.injury_trend is not None:
+        reason += f" Trend: {constraint.injury_trend}."
+    return reason
 
 
 def _build_reasons(signals: HeadCoachSignals) -> list[str]:
@@ -191,6 +221,25 @@ def _reality(signals: HeadCoachSignals, state: AssessmentState) -> str:
         f"days since last run: {run_gap}."
     )
     constraints = _decision_constraints(signals, state)
+    injury = next(
+        (item for item in _relevant_constraints(signals) if item.type == "musculoskeletal"),
+        None,
+    )
+    if injury and injury.injury_impact == "daily_limiting":
+        return "The injury / niggle is limiting normal daily movement."
+    if injury and injury.injury_impact == "daily_noticeable":
+        return (
+            f"Recovery is {signals.recovery_state} and sleep is "
+            f"{signals.sleep_state}, but the injury / niggle is still "
+            "noticeable during normal daily movement."
+        )
+    if injury and injury.injury_impact == "training_only":
+        trend = " and is worsening" if injury.injury_trend == "worse" else ""
+        return (
+            f"Recovery is {signals.recovery_state} and sleep is "
+            f"{signals.sleep_state}, but the injury / niggle remains noticeable "
+            f"under training load{trend}."
+        )
     if not constraints:
         return reality
 
@@ -206,7 +255,9 @@ def _reality(signals: HeadCoachSignals, state: AssessmentState) -> str:
     )
 
 
-def _assessment_for_state(state: AssessmentState) -> dict[str, object]:
+def _assessment_for_state(
+    state: AssessmentState, signals: HeadCoachSignals
+) -> dict[str, object]:
     assessments = {
         "rest": {
             "interpretation": "Current constraints or systemic strain make structured training inappropriate today.",
@@ -251,6 +302,28 @@ def _assessment_for_state(state: AssessmentState) -> dict[str, object]:
             "next_decision": "Treat the actual response to today's session as tomorrow's new baseline.",
         },
     }
+    injury = next(
+        (item for item in _relevant_constraints(signals) if item.type == "musculoskeletal"),
+        None,
+    )
+    if state == "active_recovery" and injury and injury.injury_impact in {
+        "daily_noticeable",
+        "training_only",
+    }:
+        return {
+            "interpretation": "Normal movement tolerance does not yet support testing running load.",
+            "session_guidance": "No running today. Keep movement gentle and symptom-limited.",
+            "watch_for": [
+                "Comfort during walking, sitting, and standing.",
+                "Whether symptoms improve, remain unchanged, or worsen.",
+            ],
+            "next_decision": "When walking, sitting, and standing are comfortable or nearly comfortable, consider a short test load.",
+        }
+    if state == "rest" and injury and injury.injury_impact == "daily_limiting":
+        return {
+            **assessments[state],
+            "next_decision": "Require clear improvement in normal daily movement before progressing beyond rest.",
+        }
     return assessments[state]
 
 
@@ -260,7 +333,7 @@ def build_head_coach_assessment(
     """Apply the deterministic Daily Head Coach v0 policy."""
 
     state = _choose_state(signals)
-    language = _assessment_for_state(state)
+    language = _assessment_for_state(state, signals)
     return HeadCoachAssessment(
         date=signals.as_of,
         state=state,

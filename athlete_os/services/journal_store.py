@@ -19,6 +19,8 @@ CONTEXT_TAG_LABELS = {
 }
 CONTEXT_TAGS = set(CONTEXT_TAG_LABELS)
 JOURNAL_SOURCES = {"manual", "migrated_legacy"}
+INJURY_IMPACTS = {"training_only", "daily_noticeable", "daily_limiting"}
+INJURY_TRENDS = {"better", "same", "worse"}
 
 
 def database_path() -> Path:
@@ -74,6 +76,8 @@ def _connect() -> sqlite3.Connection:
             confidence REAL NULL,
             confirmed INTEGER NOT NULL DEFAULT 0,
             created_at TEXT NOT NULL,
+            injury_impact TEXT NULL,
+            injury_trend TEXT NULL,
             PRIMARY KEY (date, tag, source)
         );
         """
@@ -90,6 +94,14 @@ def _connect() -> sqlite3.Connection:
                 CHECK (source IN ('manual', 'migrated_legacy'))
             """
         )
+    context_columns = {
+        row["name"]
+        for row in connection.execute("PRAGMA table_info(daily_context)")
+    }
+    if "injury_impact" not in context_columns:
+        connection.execute("ALTER TABLE daily_context ADD COLUMN injury_impact TEXT NULL")
+    if "injury_trend" not in context_columns:
+        connection.execute("ALTER TABLE daily_context ADD COLUMN injury_trend TEXT NULL")
     return connection
 
 
@@ -128,9 +140,21 @@ def delete_daily_journal(date_value: str) -> None:
             )
 
 
-def replace_manual_context(date_value: str, tags: Iterable[str]) -> None:
+def replace_manual_context(
+    date_value: str,
+    tags: Iterable[str],
+    injury_impact: str | None = None,
+    injury_trend: str | None = None,
+) -> None:
     _validated_date(date_value)
     validated_tags = validate_context_tags(tags)
+    if "injury_niggle" not in validated_tags:
+        injury_impact = None
+        injury_trend = None
+    if injury_impact is not None and injury_impact not in INJURY_IMPACTS:
+        raise ValueError("invalid injury impact")
+    if injury_trend is not None and injury_trend not in INJURY_TRENDS:
+        raise ValueError("invalid injury trend")
     now = datetime.now(timezone.utc).isoformat()
 
     with closing(_connect()) as connection:
@@ -142,10 +166,20 @@ def replace_manual_context(date_value: str, tags: Iterable[str]) -> None:
             connection.executemany(
                 """
                 INSERT INTO daily_context
-                    (date, tag, source, confidence, confirmed, created_at)
-                VALUES (?, ?, 'manual', NULL, 1, ?)
+                    (date, tag, source, confidence, confirmed, created_at,
+                     injury_impact, injury_trend)
+                VALUES (?, ?, 'manual', NULL, 1, ?, ?, ?)
                 """,
-                [(date_value, tag, now) for tag in validated_tags],
+                [
+                    (
+                        date_value,
+                        tag,
+                        now,
+                        injury_impact if tag == "injury_niggle" else None,
+                        injury_trend if tag == "injury_niggle" else None,
+                    )
+                    for tag in validated_tags
+                ],
             )
 
 
@@ -167,7 +201,8 @@ def journal_history(days: int = 14, as_of: date | None = None) -> dict[str, dict
         ).fetchall()
         contexts = connection.execute(
             """
-            SELECT date, tag, source, confidence, confirmed, created_at
+            SELECT date, tag, source, confidence, confirmed, created_at,
+                   injury_impact, injury_trend
             FROM daily_context
             WHERE date BETWEEN ? AND ?
             ORDER BY date DESC, tag
@@ -202,6 +237,8 @@ def journal_history(days: int = 14, as_of: date | None = None) -> dict[str, dict
                 "confidence": row["confidence"],
                 "confirmed": bool(row["confirmed"]),
                 "created_at": row["created_at"],
+                "injury_impact": row["injury_impact"],
+                "injury_trend": row["injury_trend"],
             }
         )
     return history

@@ -115,6 +115,30 @@ class HeadCoachContextTests(unittest.TestCase):
         self.assertEqual(constraint.status, "resolving")
         self.assertEqual(build_head_coach_assessment(signals).state, "test_load")
 
+    def test_injury_impact_and_trend_map_to_constraint(self):
+        self.get_activities.return_value = []
+        self.get_wellness.return_value = []
+        self.get_history.return_value = {
+            day(0): {
+                "context": [{
+                    "tag": "injury_niggle", "source": "manual",
+                    "injury_impact": "daily_noticeable", "injury_trend": "better",
+                }]
+            }
+        }
+
+        constraint = build_head_coach_signals(as_of=AS_OF).constraints[0]
+
+        self.assertEqual(constraint.severity, "moderate")
+        self.assertEqual(constraint.injury_impact, "daily_noticeable")
+        self.assertEqual(constraint.injury_trend, "better")
+        self.assertEqual(
+            build_head_coach_assessment(
+                build_head_coach_signals(as_of=AS_OF)
+            ).state,
+            "active_recovery",
+        )
+
     def test_subjective_sleep_fills_objective_gap_without_inflating_coverage(self):
         self.get_activities.return_value = []
         self.get_wellness.return_value = [
