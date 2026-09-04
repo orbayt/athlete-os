@@ -1,3 +1,4 @@
+import logging
 from datetime import date, timedelta
 from pathlib import Path
 from urllib.parse import parse_qs, urlencode
@@ -8,6 +9,7 @@ from fastapi.responses import RedirectResponse
 from fastapi.templating import Jinja2Templates
 
 from athlete_os.services.intervals_client import get_recent_wellness_normalized
+from athlete_os.services.head_coach_context import get_daily_head_coach
 from athlete_os.services.journal_store import (
     CONTEXT_TAG_LABELS,
     delete_daily_journal,
@@ -24,6 +26,7 @@ from athlete_os.tools.training_context import training_context
 
 app = FastAPI(title="Athlete OS")
 templates = Jinja2Templates(directory=Path(__file__).parent / "templates")
+logger = logging.getLogger(__name__)
 
 
 def _load_dashboard() -> tuple[dict | None, dict | None, list[str]]:
@@ -73,7 +76,15 @@ def _has_recovery_values(values: dict) -> bool:
 
 @app.get("/")
 def dashboard(request: Request, message: str | None = None, error: str | None = None):
+    today = date.today()
     training, recovery, provider_errors = _load_dashboard()
+    head_coach = None
+    try:
+        head_coach = get_daily_head_coach(as_of=today)
+    except Exception:
+        logger.exception(
+            "Head Coach assessment generation failed for %s", today
+        )
     latest_journal = None
     try:
         latest_journal = latest_daily_journal()
@@ -85,11 +96,12 @@ def dashboard(request: Request, message: str | None = None, error: str | None = 
         context={
             "training": training,
             "recovery": recovery,
+            "head_coach": head_coach,
             "latest_journal": latest_journal,
             "provider_errors": provider_errors,
             "message": message,
             "error": error,
-            "today": date.today().isoformat(),
+            "today": today.isoformat(),
         },
     )
 

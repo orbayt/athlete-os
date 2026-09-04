@@ -18,12 +18,24 @@
     .wide { grid-column:1/-1; } .metrics { display:grid; grid-template-columns:repeat(3,1fr); gap:10px; }
     .metric { min-width:0; padding:14px; background:#0e1814; border-radius:12px; } .metric strong { display:block; margin-top:5px; font-size:1.35rem; overflow-wrap:anywhere; }
     .metric small { display:block; } .note { color:var(--muted); font-style:italic; }
+    .coach-card { padding:26px; background:linear-gradient(135deg,rgba(25,43,35,.98),rgba(18,31,26,.98)); }
+    .coach-card h2 { color:var(--muted); font-size:.75rem; letter-spacing:.14em; }
+    .coach-state { margin-bottom:10px; font-size:clamp(1.7rem,4vw,2.5rem); line-height:1; letter-spacing:-.035em; }
+    .coach-reality { max-width:850px; color:#d5e2da; font-size:1.05rem; }
+    .coach-guidance { max-width:850px; margin-top:18px; font-size:1.2rem; font-weight:650; }
+    .coach-followup { display:grid; grid-template-columns:1fr 1fr; gap:18px; margin-top:22px; padding-top:18px; border-top:1px solid var(--line); }
+    .coach-followup h3 { margin:0 0 7px; color:var(--muted); font-size:.72rem; letter-spacing:.12em; }
+    .coach-followup ul { margin:0; padding-left:18px; }
+    .coach-confidence { margin-top:18px; color:var(--muted); font-size:.85rem; }
+    .coach-card details { margin-top:14px; color:var(--muted); }
+    .coach-card summary { cursor:pointer; }
+    .coach-card details ul { margin-bottom:0; }
     .alert { margin:0 0 16px; padding:12px 16px; border-radius:10px; background:#25342e; } .alert.error { color:var(--danger); border:1px solid #69423e; }
     form { display:grid; grid-template-columns:repeat(4,1fr); gap:14px; } .field { display:flex; flex-direction:column; gap:6px; } .field.wide { grid-column:span 2; }
     input,select,textarea,button { width:100%; border:1px solid var(--line); border-radius:9px; padding:10px 12px; background:#0d1713; color:var(--text); font:inherit; }
     textarea { min-height:140px; resize:vertical; } button { align-self:end; cursor:pointer; border:0; background:var(--accent); color:#092012; font-weight:750; }
     fieldset { grid-column:1/-1; margin:0; padding:0; border:0; } legend { margin-bottom:8px; color:var(--muted); } .tags { display:flex; flex-wrap:wrap; gap:8px; } .tag-option { display:flex; align-items:center; gap:7px; padding:8px 11px; border:1px solid var(--line); border-radius:999px; background:#0d1713; color:var(--text); cursor:pointer; } .tag-option input { width:auto; margin:0; accent-color:var(--accent); }
-    @media (max-width:760px) { main { width:min(100% - 20px,1120px); padding-top:24px; } header { align-items:start; flex-direction:column; } .card { grid-column:1/-1; } .metrics { grid-template-columns:repeat(2,1fr); } form { grid-template-columns:repeat(2,1fr); } }
+    @media (max-width:760px) { main { width:min(100% - 20px,1120px); padding-top:24px; } header { align-items:start; flex-direction:column; } .card { grid-column:1/-1; } .metrics { grid-template-columns:repeat(2,1fr); } .coach-followup { grid-template-columns:1fr; } form { grid-template-columns:repeat(2,1fr); } }
     @media (max-width:440px) { .metrics,form { grid-template-columns:1fr; } .field.wide { grid-column:auto; } }
   </style>
 </head>
@@ -34,6 +46,21 @@
   {% for provider_error in provider_errors %}<div class="alert error">{{ provider_error }}</div>{% endfor %}
 
   <div class="grid">
+    <section class="card wide coach-card"><h2>HEAD COACH · TODAY</h2>
+      {% if head_coach %}
+      {% set state_labels = {'rest':'REST','active_recovery':'ACTIVE RECOVERY','test_load':'TEST LOAD','easy':'EASY','normal':'NORMAL TRAINING'} %}
+      <div class="coach-state">{{ state_labels[head_coach.state] }}</div>
+      <p class="coach-reality">{{ head_coach.reality }}</p>
+      <p class="coach-guidance">{{ head_coach.session_guidance }}</p>
+      <div class="coach-followup">
+        <div><h3>WATCH</h3><ul>{% for item in head_coach.watch_for %}<li>{{ item }}</li>{% endfor %}</ul></div>
+        <div><h3>NEXT</h3><p>{{ head_coach.next_decision }}</p></div>
+      </div>
+      <p class="coach-confidence">Confidence: {{ head_coach.confidence|title }}</p>
+      <details><summary>Why this recommendation?</summary><ul>{% for reason in head_coach.why %}<li>{{ reason }}</li>{% endfor %}</ul></details>
+      {% else %}<p class="note">Head Coach assessment unavailable.</p>{% endif %}
+    </section>
+
     <section class="card"><h2>Training State</h2>
       {% if training %}{% set recent = training.load.recent.observed_value %}{% set background = training.load.background.observed_value %}
       <div class="metrics">

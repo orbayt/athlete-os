@@ -6,6 +6,7 @@ from starlette.requests import Request
 
 from athlete_os.tools.recovery_context import build_recovery_context
 from athlete_os.tools.training_context import build_training_context
+from athlete_os.tools.head_coach import HeadCoachAssessment
 from athlete_os.ui.app import (
     _save_checkin,
     _save_history_edit,
@@ -28,12 +29,29 @@ def get_request(path):
 
 
 class UiTests(unittest.TestCase):
+    def head_coach(self, **overrides):
+        values = {
+            "date": date.today(),
+            "state": "test_load",
+            "reality": "Recovery is good, but an active constraint remains.",
+            "interpretation": "Load tolerance remains uncertain.",
+            "session_guidance": "Test the system, not train it.",
+            "why": ["An injury constraint is active."],
+            "watch_for": ["Symptoms during activity.", "Symptoms later."],
+            "next_decision": "Progress only if symptoms do not worsen.",
+            "confidence": "high",
+        }
+        values.update(overrides)
+        return HeadCoachAssessment(**values)
+
+    @patch("athlete_os.ui.app.get_daily_head_coach")
     @patch("athlete_os.ui.app.latest_daily_journal", return_value=None)
     @patch("athlete_os.ui.app.recovery_context")
     @patch("athlete_os.ui.app.training_context")
     def test_dashboard_renders_domain_context(
-        self, training, recovery, latest_journal
+        self, training, recovery, latest_journal, get_head_coach
     ):
+        get_head_coach.return_value = self.head_coach()
         training.return_value = build_training_context([], date(2026, 9, 3))
         recovery.return_value = build_recovery_context([], date(2026, 9, 3))
 
@@ -49,13 +67,47 @@ class UiTests(unittest.TestCase):
         self.assertIn("Journal", body)
         self.assertIn("Alcohol / hangover", body)
         self.assertIn("0.0%", body)
+        self.assertIn("HEAD COACH · TODAY", body)
+        self.assertIn("TEST LOAD", body)
+        self.assertIn("Recovery is good, but an active constraint remains.", body)
+        self.assertIn("Test the system, not train it.", body)
+        self.assertIn("Symptoms during activity.", body)
+        self.assertIn("Progress only if symptoms do not worsen.", body)
+        self.assertIn("Confidence: High", body)
+        self.assertNotIn("readiness score", body.lower())
 
+    @patch(
+        "athlete_os.ui.app.get_daily_head_coach",
+        side_effect=RuntimeError("assessment source offline"),
+    )
+    @patch("athlete_os.ui.app.latest_daily_journal", return_value=None)
+    @patch("athlete_os.ui.app.recovery_context")
+    @patch("athlete_os.ui.app.training_context")
+    def test_dashboard_head_coach_failure_renders_fallback(
+        self, training, recovery, latest_journal, get_head_coach
+    ):
+        today = date.today()
+        training.return_value = build_training_context([], today)
+        recovery.return_value = build_recovery_context([], today)
+
+        with self.assertLogs("athlete_os.ui.app", level="ERROR") as logs:
+            response = dashboard(get_request("/"))
+        body = response.body.decode()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("Head Coach assessment unavailable.", body)
+        self.assertNotIn("assessment source offline", body)
+        self.assertNotIn("NORMAL TRAINING", body)
+        self.assertIn("Head Coach assessment generation failed", logs.output[0])
+
+    @patch("athlete_os.ui.app.get_daily_head_coach")
     @patch("athlete_os.ui.app.latest_daily_journal", return_value=None)
     @patch("athlete_os.ui.app.recovery_context")
     @patch("athlete_os.ui.app.training_context")
     def test_dashboard_notes_mixed_resting_hr_context(
-        self, training, recovery, latest_journal
+        self, training, recovery, latest_journal, get_head_coach
     ):
+        get_head_coach.return_value = self.head_coach()
         today = date.today()
         training.return_value = build_training_context([], today)
         recovery.return_value = build_recovery_context(
@@ -420,12 +472,14 @@ class UiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 303)
         self.assertIn("must+not+be+in+the+future", response.headers["location"])
 
+    @patch("athlete_os.ui.app.get_daily_head_coach")
     @patch("athlete_os.ui.app.latest_daily_journal", return_value=None)
     @patch("athlete_os.ui.app.recovery_context", side_effect=RuntimeError("offline"))
     @patch("athlete_os.ui.app.training_context", side_effect=RuntimeError("offline"))
     def test_dashboard_displays_provider_errors(
-        self, training, recovery, latest_journal
+        self, training, recovery, latest_journal, get_head_coach
     ):
+        get_head_coach.return_value = self.head_coach()
         response = dashboard(get_request("/"))
         body = response.body.decode()
 
