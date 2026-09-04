@@ -6,17 +6,19 @@ from pathlib import Path
 from typing import Iterable
 
 
-CONTEXT_TAGS = {
-    "travel",
-    "illness",
-    "injury_niggle",
-    "work_stress",
-    "family_load",
-    "environmental_stress",
-    "sleep_disruption",
-    "alcohol",
-    "unusual_time_on_feet",
+CONTEXT_TAG_LABELS = {
+    "travel": "Travel",
+    "illness": "Illness",
+    "injury_niggle": "Injury / niggle",
+    "work_stress": "Work stress",
+    "family_load": "Family load",
+    "environmental_stress": "Environmental stress",
+    "sleep_disruption": "Sleep disruption",
+    "unusual_time_on_feet": "Unusual time on feet",
+    "alcohol": "Alcohol / hangover",
 }
+CONTEXT_TAGS = set(CONTEXT_TAG_LABELS)
+JOURNAL_SOURCES = {"manual", "migrated_legacy"}
 
 
 def database_path() -> Path:
@@ -59,6 +61,8 @@ def _connect() -> sqlite3.Connection:
         CREATE TABLE IF NOT EXISTS daily_journal (
             date TEXT PRIMARY KEY,
             text TEXT NOT NULL,
+            source TEXT NOT NULL DEFAULT 'manual'
+                CHECK (source IN ('manual', 'migrated_legacy')),
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
         );
@@ -74,26 +78,53 @@ def _connect() -> sqlite3.Connection:
         );
         """
     )
+    journal_columns = {
+        row["name"]
+        for row in connection.execute("PRAGMA table_info(daily_journal)")
+    }
+    if "source" not in journal_columns:
+        connection.execute(
+            """
+            ALTER TABLE daily_journal
+            ADD COLUMN source TEXT NOT NULL DEFAULT 'manual'
+                CHECK (source IN ('manual', 'migrated_legacy'))
+            """
+        )
     return connection
 
 
-def save_daily_journal(date_value: str, text: str) -> None:
+def save_daily_journal(
+    date_value: str, text: str, source: str = "manual"
+) -> None:
     _validated_date(date_value)
     if not isinstance(text, str) or not text:
         raise ValueError("journal text must not be empty")
+    if source not in JOURNAL_SOURCES:
+        raise ValueError("invalid journal source")
 
     now = datetime.now(timezone.utc).isoformat()
     with closing(_connect()) as connection:
         with connection:
             connection.execute(
                 """
-                INSERT INTO daily_journal (date, text, created_at, updated_at)
-                VALUES (?, ?, ?, ?)
+                INSERT INTO daily_journal
+                    (date, text, source, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?)
                 ON CONFLICT(date) DO UPDATE SET
                     text = excluded.text,
+                    source = excluded.source,
                     updated_at = excluded.updated_at
                 """,
-                (date_value, text, now, now),
+                (date_value, text, source, now, now),
+            )
+
+
+def delete_daily_journal(date_value: str) -> None:
+    _validated_date(date_value)
+    with closing(_connect()) as connection:
+        with connection:
+            connection.execute(
+                "DELETE FROM daily_journal WHERE date = ?", (date_value,)
             )
 
 
@@ -127,7 +158,7 @@ def journal_history(days: int = 14, as_of: date | None = None) -> dict[str, dict
     with closing(_connect()) as connection:
         journals = connection.execute(
             """
-            SELECT date, text, created_at, updated_at
+            SELECT date, text, source, created_at, updated_at
             FROM daily_journal
             WHERE date BETWEEN ? AND ?
             ORDER BY date DESC
@@ -148,6 +179,7 @@ def journal_history(days: int = 14, as_of: date | None = None) -> dict[str, dict
     for row in journals:
         history[row["date"]] = {
             "journal_text": row["text"],
+            "journal_source": row["source"],
             "created_at": row["created_at"],
             "updated_at": row["updated_at"],
             "context": [],
@@ -155,7 +187,13 @@ def journal_history(days: int = 14, as_of: date | None = None) -> dict[str, dict
     for row in contexts:
         entry = history.setdefault(
             row["date"],
-            {"journal_text": None, "created_at": None, "updated_at": None, "context": []},
+            {
+                "journal_text": None,
+                "journal_source": None,
+                "created_at": None,
+                "updated_at": None,
+                "context": [],
+            },
         )
         entry["context"].append(
             {
@@ -167,3 +205,61 @@ def journal_history(days: int = 14, as_of: date | None = None) -> dict[str, dict
             }
         )
     return history
+
+
+def latest_daily_journal(as_of: str | None = None) -> dict | None:
+    as_of_date = _validated_date(as_of) if as_of is not None else date.today()
+    with closing(_connect()) as connection:
+        row = connection.execute(
+            """
+            SELECT date, text
+            FROM daily_journal
+            WHERE date <= ?
+            ORDER BY date DESC
+            LIMIT 1
+            """,
+            (as_of_date.isoformat(),),
+        ).fetchone()
+    if row is None:
+        return None
+    return {"date": row["date"], "text": row["text"]}
+
+
+def migrate_legacy_context_notes(wellness: list[dict]) -> dict:
+    summary = {
+        "scanned": len(wellness),
+        "migrated": 0,
+        "skipped_existing": 0,
+        "skipped_empty": 0,
+    }
+    now = datetime.now(timezone.utc).isoformat()
+
+    with closing(_connect()) as connection:
+        with connection:
+            for record in wellness:
+                text = record.get("context_note")
+                if not isinstance(text, str) or not text.strip():
+                    summary["skipped_empty"] += 1
+                    continue
+
+                date_value = record.get("date")
+                _validated_date(date_value)
+                exists = connection.execute(
+                    "SELECT 1 FROM daily_journal WHERE date = ?",
+                    (date_value,),
+                ).fetchone()
+                if exists:
+                    summary["skipped_existing"] += 1
+                    continue
+
+                connection.execute(
+                    """
+                    INSERT INTO daily_journal
+                        (date, text, source, created_at, updated_at)
+                    VALUES (?, ?, 'migrated_legacy', ?, ?)
+                    """,
+                    (date_value, text, now, now),
+                )
+                summary["migrated"] += 1
+
+    return summary

@@ -96,8 +96,9 @@ class RecoveryCheckinTests(unittest.TestCase):
             },
         )
 
+    @patch("athlete_os.tools.recovery_checkin.save_daily_journal")
     @patch("athlete_os.tools.recovery_checkin.update_wellness")
-    def test_context_note_is_trimmed_passed_through_and_valid_alone(self, update):
+    def test_context_note_routes_to_canonical_journal_only(self, update, save_journal):
         text = "Mild runny nose and throat irritation today."
 
         result = record_recovery_checkin(
@@ -105,12 +106,44 @@ class RecoveryCheckinTests(unittest.TestCase):
             date_value="2026-08-20",
         )
 
-        update.assert_called_once_with(
-            date(2026, 8, 20),
-            {"AthleteOSContextNote": text},
-        )
+        save_journal.assert_called_once_with("2026-08-20", text)
+        update.assert_not_called()
         self.assertEqual(result["recorded"], {"context_note": text})
-        self.assertNotIn("AthleteOSContextNote", result["recorded"])
+
+    @patch("athlete_os.tools.recovery_checkin.save_daily_journal")
+    @patch("athlete_os.tools.recovery_checkin.update_wellness")
+    def test_context_note_is_excluded_from_provider_recovery_write(
+        self, update, save_journal
+    ):
+        record_recovery_checkin(
+            fatigue="high",
+            context_note="Journal entry",
+            date_value="2026-08-20",
+        )
+
+        save_journal.assert_called_once_with("2026-08-20", "Journal entry")
+        update.assert_called_once_with(
+            date(2026, 8, 20), {"AthleteOSReportedFatigue": 3}
+        )
+
+    @patch("athlete_os.tools.recovery_checkin.save_daily_journal")
+    @patch(
+        "athlete_os.tools.recovery_checkin.update_wellness",
+        side_effect=RuntimeError("provider unavailable"),
+    )
+    def test_context_note_journal_survives_provider_failure(
+        self, update, save_journal
+    ):
+        with self.assertRaisesRegex(RuntimeError, "provider unavailable"):
+            record_recovery_checkin(
+                fatigue="high",
+                context_note="Canonical journal",
+                date_value="2026-08-20",
+            )
+
+        save_journal.assert_called_once_with(
+            "2026-08-20", "Canonical journal"
+        )
 
     def test_blank_context_note_is_rejected(self):
         with self.assertRaisesRegex(ValueError, "context_note must not be empty"):

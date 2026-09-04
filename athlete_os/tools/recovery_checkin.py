@@ -4,6 +4,7 @@ from athlete_os.services.intervals_client import (
     encode_recovery_checkin,
     update_wellness,
 )
+from athlete_os.services.journal_store import save_daily_journal
 
 
 LABELS = {
@@ -52,7 +53,7 @@ def record_recovery_checkin(
     context_note: str | None = None,
     date_value: str | None = None,
 ) -> dict:
-    """Record subjective daily recovery information."""
+    """Record recovery values and backwards-compatible Journal input."""
 
     checkin_date = _checkin_date(date_value)
     recorded = {}
@@ -99,7 +100,16 @@ def record_recovery_checkin(
     if not recorded:
         raise ValueError("at least one recovery value must be supplied")
 
-    update_wellness(checkin_date, encode_recovery_checkin(recorded))
+    if context_note is not None:
+        save_daily_journal(
+            checkin_date.isoformat(), recorded["context_note"]
+        )
+
+    provider_recorded = {
+        key: value for key, value in recorded.items() if key != "context_note"
+    }
+    if provider_recorded:
+        update_wellness(checkin_date, encode_recovery_checkin(provider_recorded))
     return {
         "date": checkin_date.isoformat(),
         "recorded": recorded,

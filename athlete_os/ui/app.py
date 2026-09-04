@@ -9,7 +9,10 @@ from fastapi.templating import Jinja2Templates
 
 from athlete_os.services.intervals_client import get_recent_wellness_normalized
 from athlete_os.services.journal_store import (
+    CONTEXT_TAG_LABELS,
+    delete_daily_journal,
     journal_history,
+    latest_daily_journal,
     replace_manual_context,
     save_daily_journal,
     validate_context_tags,
@@ -71,12 +74,18 @@ def _has_recovery_values(values: dict) -> bool:
 @app.get("/")
 def dashboard(request: Request, message: str | None = None, error: str | None = None):
     training, recovery, provider_errors = _load_dashboard()
+    latest_journal = None
+    try:
+        latest_journal = latest_daily_journal()
+    except Exception as journal_error:
+        provider_errors.append(f"Local journal: {journal_error}")
     return templates.TemplateResponse(
         request=request,
         name="dashboard.html",
         context={
             "training": training,
             "recovery": recovery,
+            "latest_journal": latest_journal,
             "provider_errors": provider_errors,
             "message": message,
             "error": error,
@@ -115,7 +124,7 @@ def _save_checkin(submitted: dict[str, list[str]]) -> RedirectResponse:
             "stress": _optional_text(stress),
             "mood": _optional_text(mood),
             "motivation": _optional_text(motivation),
-            "context_note": normalized_journal,
+            "context_note": None,
         }
 
         if normalized_journal is not None or validated_tags:
@@ -159,9 +168,19 @@ async def save_checkin(request: Request):
     return _save_checkin(submitted)
 
 
+def _history_days(days: int) -> int:
+    return days if days in {14, 30, 60} else max(1, min(days, 90))
+
+
 @app.get("/history")
-def history(request: Request, days: int = 14):
-    selected_days = days if days in {14, 30, 60} else max(1, min(days, 90))
+def history(
+    request: Request,
+    days: int = 14,
+    edit: str | None = None,
+    message: str | None = None,
+    error: str | None = None,
+):
+    selected_days = _history_days(days)
     today = date.today()
     local_error = None
     provider_error = None
@@ -192,6 +211,7 @@ def history(request: Request, days: int = 14):
                 "wellness": wellness_by_date.get(entry_date),
                 "journal_text": local_entry.get("journal_text"),
                 "context": local_entry.get("context", []),
+                "is_editing": entry_date == edit,
             }
         )
 
@@ -203,8 +223,72 @@ def history(request: Request, days: int = 14):
             "days": selected_days,
             "local_error": local_error,
             "provider_error": provider_error,
+            "message": message,
+            "error": error,
+            "context_tag_labels": CONTEXT_TAG_LABELS,
         },
     )
+
+
+def _save_history_edit(submitted: dict[str, list[str]]) -> RedirectResponse:
+    def field(name: str) -> str:
+        return submitted.get(name, [""])[-1]
+
+    date_value = field("date")
+    try:
+        days = _history_days(int(field("days") or 14))
+    except ValueError:
+        days = 14
+    local_saved = False
+
+    try:
+        journal = _journal_text(field("journal_text"))
+        tags = validate_context_tags(submitted.get("context_tags", []))
+        recovery_values = {
+            "date_value": date_value,
+            "sleep_hours": _optional_float(field("reported_sleep_hours")),
+            "sleep_quality": _optional_text(field("reported_sleep_quality")),
+            "fatigue": _optional_text(field("fatigue")),
+            "soreness": _optional_text(field("soreness")),
+            "stress": _optional_text(field("stress")),
+            "mood": _optional_text(field("mood")),
+            "motivation": _optional_text(field("motivation")),
+            "context_note": None,
+        }
+
+        if journal is None:
+            delete_daily_journal(date_value)
+        else:
+            save_daily_journal(date_value, journal)
+        replace_manual_context(date_value, tags)
+        local_saved = True
+
+        recovery_fields = {
+            key: value
+            for key, value in recovery_values.items()
+            if key != "date_value"
+        }
+        if _has_recovery_values(recovery_fields):
+            record_recovery_checkin(**recovery_values)
+            message = f"{date_value}: journal context and recovery check-in saved."
+        else:
+            message = f"{date_value}: journal context saved locally."
+        query = urlencode({"days": days, "message": message})
+    except Exception as error:
+        prefix = "Local journal context was saved, but " if local_saved else ""
+        query = urlencode({"days": days, "error": f"{prefix}{error}"})
+
+    return RedirectResponse(
+        url=f"/history?{query}#day-{date_value}", status_code=303
+    )
+
+
+@app.post("/history/edit")
+async def save_history_edit(request: Request):
+    submitted = parse_qs(
+        (await request.body()).decode("utf-8"), keep_blank_values=True
+    )
+    return _save_history_edit(submitted)
 
 
 def main() -> None:

@@ -9,7 +9,9 @@ from unittest.mock import patch
 
 from athlete_os.services.journal_store import (
     database_path,
+    delete_daily_journal,
     journal_history,
+    migrate_legacy_context_notes,
     replace_manual_context,
     save_daily_journal,
 )
@@ -38,6 +40,79 @@ class JournalStoreTests(unittest.TestCase):
         self.assertEqual(database_path(), self.db_path)
         self.assertTrue(self.db_path.exists())
         self.assertEqual(journal_history()[self.day]["journal_text"], raw_text)
+        self.assertEqual(journal_history()[self.day]["journal_source"], "manual")
+
+    def test_existing_database_gains_manual_source_without_recreation(self):
+        with closing(sqlite3.connect(self.db_path)) as connection:
+            connection.execute(
+                """
+                CREATE TABLE daily_journal (
+                    date TEXT PRIMARY KEY,
+                    text TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                )
+                """
+            )
+            connection.execute(
+                "INSERT INTO daily_journal VALUES (?, ?, ?, ?)",
+                (self.day, "Existing text", "created", "updated"),
+            )
+            connection.commit()
+
+        entry = journal_history()[self.day]
+
+        self.assertEqual(entry["journal_text"], "Existing text")
+        self.assertEqual(entry["journal_source"], "manual")
+        with closing(sqlite3.connect(self.db_path)) as connection:
+            columns = {
+                row[1] for row in connection.execute("PRAGMA table_info(daily_journal)")
+            }
+        self.assertIn("source", columns)
+
+    def test_legacy_context_migration_is_preserving_and_idempotent(self):
+        existing_day = self.day
+        migrated_day = (date.today() - timedelta(days=2)).isoformat()
+        preserved_text = "  Exact legacy text.\nSecond line.  "
+        save_daily_journal(existing_day, "Canonical wins")
+        wellness = [
+            {"date": migrated_day, "context_note": preserved_text},
+            {"date": existing_day, "context_note": "Must not overwrite"},
+            {"date": date.today().isoformat(), "context_note": None},
+            {
+                "date": (date.today() - timedelta(days=3)).isoformat(),
+                "context_note": "   ",
+            },
+        ]
+
+        first = migrate_legacy_context_notes(wellness)
+        second = migrate_legacy_context_notes(wellness)
+        history = journal_history(days=14)
+
+        self.assertEqual(
+            first,
+            {
+                "scanned": 4,
+                "migrated": 1,
+                "skipped_existing": 1,
+                "skipped_empty": 2,
+            },
+        )
+        self.assertEqual(
+            second,
+            {
+                "scanned": 4,
+                "migrated": 0,
+                "skipped_existing": 2,
+                "skipped_empty": 2,
+            },
+        )
+        self.assertEqual(history[migrated_day]["journal_text"], preserved_text)
+        self.assertEqual(
+            history[migrated_day]["journal_source"], "migrated_legacy"
+        )
+        self.assertEqual(history[existing_day]["journal_text"], "Canonical wins")
+        self.assertEqual(history[existing_day]["journal_source"], "manual")
 
     def test_saving_same_date_updates_text_and_preserves_created_at(self):
         save_daily_journal(self.day, "First entry")
@@ -48,6 +123,13 @@ class JournalStoreTests(unittest.TestCase):
 
         self.assertEqual(updated["journal_text"], "Updated entry")
         self.assertEqual(updated["created_at"], first["created_at"])
+
+    def test_daily_journal_can_be_deleted_explicitly(self):
+        save_daily_journal(self.day, "Remove this entry")
+
+        delete_daily_journal(self.day)
+
+        self.assertNotIn(self.day, journal_history())
 
     def test_manual_context_tags_are_persisted_with_manual_metadata(self):
         replace_manual_context(self.day, ["travel", "alcohol"])

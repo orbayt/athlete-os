@@ -72,7 +72,7 @@
       </div>{% else %}<p class="note">Coverage is currently unavailable.</p>{% endif %}
     </section>
 
-    <section class="card wide"><h2>Context</h2>{% set note = recovery.contextual.context_notes.latest if recovery else none %}<p class="note">{% if note %}{{ note.text }} — {{ note.date }}{% else %}No context note recorded.{% endif %}</p></section>
+    <section class="card wide"><h2>Journal</h2><p class="note">{% if latest_journal %}{{ latest_journal.text }} — {{ latest_journal.date }}{% else %}No journal entry recorded.{% endif %}</p></section>
 
     <section class="card wide"><h2>Daily check-in</h2>
       <form method="post" action="/checkin">

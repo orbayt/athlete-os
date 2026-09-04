@@ -1,5 +1,6 @@
 from fastmcp import FastMCP
 
+from athlete_os.tools.athlete_context import athlete_context
 from athlete_os.tools.activities import activities, recent_activities
 from athlete_os.tools.health import health_check
 from athlete_os.tools.recovery_checkin import record_recovery_checkin
@@ -23,6 +24,7 @@ mcp.tool(training_state)
 mcp.tool(training_context)
 mcp.tool(record_recovery_checkin)
 mcp.tool(recovery_context)
+mcp.tool(athlete_context)
 
 if __name__ == "__main__":
     mcp.run()
