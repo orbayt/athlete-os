@@ -14,6 +14,7 @@
     .day { margin-bottom:14px; padding:20px; scroll-margin-top:1rem; background:rgba(20,32,28,.94); border:1px solid var(--line); border-radius:16px; } .day-head { display:flex; justify-content:space-between; gap:12px; margin-bottom:14px; }
     .signals { display:grid; grid-template-columns:repeat(3,1fr); gap:8px; margin-bottom:14px; } .signal { padding:10px 12px; background:#0e1814; border-radius:9px; } .signal small { display:block; color:var(--muted); } .signal strong { text-transform:capitalize; }
     .tags { display:flex; flex-wrap:wrap; gap:7px; margin:12px 0; } .tag { padding:5px 9px; color:var(--accent); border:1px solid #376348; border-radius:999px; font-size:.82rem; }
+    .coach-history { margin:14px 0; padding:13px 15px; background:#0e1814; border-radius:10px; } .coach-history .eyebrow { color:var(--muted); font-size:.7rem; letter-spacing:.12em; } .coach-history strong { display:block; margin:4px 0; } .coach-history details { margin-top:9px; color:var(--muted); } .coach-event { margin-top:10px; padding-top:10px; border-top:1px solid var(--line); } .coach-event p { color:var(--text); }
     blockquote { margin:12px 0 0; padding:13px 15px; white-space:pre-wrap; background:#0e1814; border-left:3px solid var(--accent); border-radius:0 9px 9px 0; } .empty { color:var(--muted); font-style:italic; }
     .edit-link { color:var(--muted); font-size:.85rem; } form { margin-top:18px; padding-top:18px; border-top:1px solid var(--line); } .form-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:12px; } label,legend { color:var(--muted); font-size:.86rem; } .field { display:flex; flex-direction:column; gap:5px; } .wide { grid-column:1/-1; } input,select,textarea,button { width:100%; padding:9px 11px; color:var(--text); background:#0d1713; border:1px solid var(--line); border-radius:8px; font:inherit; } textarea { min-height:120px; resize:vertical; } fieldset { margin:14px 0; padding:0; border:0; } .tag-options { display:flex; flex-wrap:wrap; gap:7px; margin-top:8px; } .tag-option { display:flex; align-items:center; gap:6px; padding:6px 9px; color:var(--text); background:#0d1713; border:1px solid var(--line); border-radius:999px; } .tag-option input { width:auto; } .actions { display:flex; align-items:center; gap:14px; } button { width:auto; cursor:pointer; color:#092012; background:var(--accent); border:0; font-weight:700; }
     .injury-context { display:grid; grid-template-columns:repeat(2,1fr); gap:12px; margin:12px 0; padding:12px; border:1px solid var(--line); border-radius:10px; } .injury-context[hidden] { display:none; }
@@ -42,8 +43,14 @@
       <div class="signal"><small>Motivation</small><strong>{{ w.reported_motivation if w.reported_motivation is not none else '—' }}</strong></div>
     </div>{% endif %}
     {% if entry.context %}<div class="tags">{% for context in entry.context %}<span class="tag">{{ context_tag_labels.get(context.tag, context.tag|replace('_',' ')|title) }}</span>{% endfor %}</div>{% endif %}
+    {% if entry.coach_decisions %}{% set latest_coach = entry.coach_decisions[0] %}
+    <section class="coach-history"><span class="eyebrow">HEAD COACH</span><strong>{{ latest_coach.assessment.state|replace('_',' ')|upper }}</strong><p>{{ latest_coach.assessment.session_guidance }}</p>
+      {% if entry.coach_decisions|length > 1 %}<details><summary>{{ entry.coach_decisions|length }} coach decisions · Decision history</summary>
+        {% for decision in entry.coach_decisions|reverse %}<div class="coach-event"><small>{{ decision.created_at.strftime('%H:%M') }}</small><strong>{{ decision.assessment.state|replace('_',' ')|upper }}</strong><p>{{ decision.assessment.reality }}</p><p>{{ decision.assessment.session_guidance }}</p></div>{% endfor %}
+      </details>{% endif %}
+    </section>{% endif %}
     {% if not entry.is_editing %}{% if entry.journal_text %}<blockquote>{{ entry.journal_text }}</blockquote>
-    {% elif not w and not entry.context %}<p class="empty">No data recorded.</p>{% endif %}{% endif %}
+    {% elif not w and not entry.context and not entry.coach_decisions %}<p class="empty">No data recorded.</p>{% endif %}{% endif %}
     {% if entry.is_editing %}{% set manual_tags = entry.context|selectattr('source','equalto','manual')|map(attribute='tag')|list %}{% set injury = entry.context|selectattr('source','equalto','manual')|selectattr('tag','equalto','injury_niggle')|first %}
     <form method="post" action="/history/edit">
       <input type="hidden" name="date" value="{{ entry.date }}"><input type="hidden" name="days" value="{{ days }}">

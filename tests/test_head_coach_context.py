@@ -2,8 +2,11 @@ import unittest
 from datetime import date, timedelta
 from unittest.mock import patch
 
-from athlete_os.services.head_coach_context import build_head_coach_signals
-from athlete_os.tools.head_coach import build_head_coach_assessment
+from athlete_os.services.head_coach_context import (
+    build_head_coach_signals,
+    get_daily_head_coach,
+)
+from athlete_os.tools.head_coach import HeadCoachSignals, build_head_coach_assessment
 
 
 AS_OF = date(2026, 9, 4)
@@ -139,6 +142,85 @@ class HeadCoachContextTests(unittest.TestCase):
             "active_recovery",
         )
 
+    def test_newest_injury_observation_replaces_older_severity(self):
+        self.get_activities.return_value = []
+        self.get_wellness.return_value = []
+        self.get_history.return_value = {
+            day(1): {"context": [{
+                "tag": "injury_niggle", "source": "manual",
+                "injury_impact": "daily_noticeable", "injury_trend": "better",
+            }]},
+            day(2): {"context": [{
+                "tag": "injury_niggle", "source": "manual",
+                "injury_impact": "daily_limiting", "injury_trend": "same",
+            }]},
+        }
+
+        signals = build_head_coach_signals(as_of=AS_OF)
+        injury = signals.constraints[0]
+
+        self.assertEqual(injury.injury_impact, "daily_noticeable")
+        self.assertEqual(injury.injury_trend, "better")
+        self.assertEqual(injury.severity, "moderate")
+        self.assertEqual(injury.status, "resolving")
+        self.assertEqual(injury.source_date, AS_OF - timedelta(days=1))
+        self.assertEqual(build_head_coach_assessment(signals).state, "active_recovery")
+        self.assertEqual(
+            self.get_history.return_value[day(2)]["context"][0]["injury_impact"],
+            "daily_limiting",
+        )
+
+    def test_explicit_checkin_without_injury_stops_carry_forward(self):
+        self.get_activities.return_value = [activity(12)]
+        self.get_wellness.return_value = [wellness(
+            0, sleep_hours=7.5, reported_fatigue="low", reported_stress="low"
+        )]
+        self.get_history.return_value = {
+            day(0): {"checkin_submitted": True, "context": []},
+            day(1): {"context": [{
+                "tag": "injury_niggle", "source": "manual",
+                "injury_impact": "daily_noticeable", "injury_trend": "better",
+            }]},
+        }
+
+        signals = build_head_coach_signals(as_of=AS_OF)
+
+        self.assertFalse(any(c.type == "musculoskeletal" for c in signals.constraints))
+        self.assertEqual(build_head_coach_assessment(signals).state, "easy")
+
+    def test_no_checkin_carries_latest_injury_as_resolving(self):
+        self.get_activities.return_value = []
+        self.get_wellness.return_value = []
+        self.get_history.return_value = {day(1): {"context": [{
+            "tag": "injury_niggle", "source": "manual",
+            "injury_impact": "daily_noticeable", "injury_trend": "better",
+        }]}}
+
+        injury = build_head_coach_signals(as_of=AS_OF).constraints[0]
+
+        self.assertEqual(injury.status, "resolving")
+        self.assertEqual(injury.source_date, AS_OF - timedelta(days=1))
+
+    def test_explicit_current_injury_is_active_and_wins(self):
+        self.get_activities.return_value = []
+        self.get_wellness.return_value = []
+        self.get_history.return_value = {
+            day(0): {"checkin_submitted": True, "context": [{
+                "tag": "injury_niggle", "source": "manual",
+                "injury_impact": "training_only", "injury_trend": "better",
+            }]},
+            day(1): {"context": [{
+                "tag": "injury_niggle", "source": "manual",
+                "injury_impact": "daily_limiting", "injury_trend": "worse",
+            }]},
+        }
+
+        injury = build_head_coach_signals(as_of=AS_OF).constraints[0]
+
+        self.assertEqual(injury.status, "active")
+        self.assertEqual(injury.injury_impact, "training_only")
+        self.assertEqual(injury.source_date, AS_OF)
+
     def test_subjective_sleep_fills_objective_gap_without_inflating_coverage(self):
         self.get_activities.return_value = []
         self.get_wellness.return_value = [
@@ -215,6 +297,57 @@ class HeadCoachContextTests(unittest.TestCase):
 
         self.assertEqual(signals.constraints, [])
         self.assertFalse(signals.subjective_data_available)
+
+    @patch(
+        "athlete_os.services.head_coach_context.record_head_coach_decision",
+        side_effect=RuntimeError("database unavailable"),
+    )
+    @patch(
+        "athlete_os.services.head_coach_context.daily_checkin_exists",
+        return_value=True,
+    )
+    @patch("athlete_os.services.head_coach_context.build_head_coach_signals")
+    def test_memory_failure_does_not_block_assessment(
+        self, build_signals, checkin_exists, record_decision
+    ):
+        current = HeadCoachSignals(
+            as_of=AS_OF,
+            recovery_state="unknown",
+            sleep_state="unknown",
+            recent_training_load="unknown",
+            recent_activity_days=0,
+            days_since_run=None,
+            motivation_state="unknown",
+            constraints=[],
+            objective_data_coverage=0,
+            subjective_data_available=False,
+        )
+        build_signals.return_value = current
+
+        with self.assertLogs(
+            "athlete_os.services.head_coach_context", level="ERROR"
+        ) as logs:
+            assessment = get_daily_head_coach(as_of=AS_OF)
+
+        self.assertEqual(assessment, build_head_coach_assessment(current))
+        record_decision.assert_called_once()
+        self.assertIn("decision persistence failed", logs.output[0])
+
+    @patch("athlete_os.services.head_coach_context.record_head_coach_decision")
+    @patch("athlete_os.services.head_coach_context.build_head_coach_signals")
+    @patch(
+        "athlete_os.services.head_coach_context.daily_checkin_exists",
+        return_value=False,
+    )
+    def test_no_checkin_returns_no_assessment_or_memory_event(
+        self, checkin_exists, build_signals, record_decision
+    ):
+        assessment = get_daily_head_coach(as_of=AS_OF)
+
+        self.assertIsNone(assessment)
+        checkin_exists.assert_called_once_with(AS_OF.isoformat())
+        build_signals.assert_not_called()
+        record_decision.assert_not_called()
 
 
 if __name__ == "__main__":

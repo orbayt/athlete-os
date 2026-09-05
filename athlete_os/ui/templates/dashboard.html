@@ -59,6 +59,7 @@
         <div><h3>NEXT</h3><p>{{ head_coach.next_decision }}</p></div>
       </div>
       <details><summary>Why this recommendation?</summary><ul>{% for reason in head_coach.why %}<li>{{ reason }}</li>{% endfor %}</ul></details>
+      {% elif head_coach_awaiting %}<div class="coach-state">AWAITING CHECK-IN</div><p class="coach-reality">Complete today's check-in to get a new recommendation.</p>
       {% else %}<p class="note">Head Coach assessment unavailable.</p>{% endif %}
     </section>
 

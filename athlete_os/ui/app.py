@@ -10,12 +10,14 @@ from fastapi.templating import Jinja2Templates
 
 from athlete_os.services.intervals_client import get_recent_wellness_normalized
 from athlete_os.services.head_coach_context import get_daily_head_coach
+from athlete_os.services.head_coach_memory import get_head_coach_decisions
 from athlete_os.services.journal_store import (
     CONTEXT_TAG_LABELS,
     delete_daily_journal,
     journal_history,
     latest_daily_journal,
     replace_manual_context,
+    record_daily_checkin,
     save_daily_journal,
     validate_context_tags,
 )
@@ -93,8 +95,10 @@ def dashboard(request: Request, message: str | None = None, error: str | None = 
     today = date.today()
     training, recovery, provider_errors = _load_dashboard()
     head_coach = None
+    head_coach_awaiting = False
     try:
         head_coach = get_daily_head_coach(as_of=today)
+        head_coach_awaiting = head_coach is None
     except Exception:
         logger.exception(
             "Head Coach assessment generation failed for %s", today
@@ -111,6 +115,7 @@ def dashboard(request: Request, message: str | None = None, error: str | None = 
             "training": training,
             "recovery": recovery,
             "head_coach": head_coach,
+            "head_coach_awaiting": head_coach_awaiting,
             "latest_journal": latest_journal,
             "provider_errors": provider_errors,
             "message": message,
@@ -155,19 +160,19 @@ def _save_checkin(submitted: dict[str, list[str]]) -> RedirectResponse:
             "context_note": None,
         }
 
-        if normalized_journal is not None or validated_tags:
-            if normalized_date is None:
-                normalized_date = date.today().isoformat()
-                recovery_values["date_value"] = normalized_date
-            if normalized_journal is not None:
-                save_daily_journal(normalized_date, normalized_journal)
-            _save_manual_context(
-                normalized_date,
-                validated_tags,
-                injury_impact,
-                injury_trend,
-            )
-            local_saved = True
+        if normalized_date is None:
+            normalized_date = date.today().isoformat()
+            recovery_values["date_value"] = normalized_date
+        if normalized_journal is not None:
+            save_daily_journal(normalized_date, normalized_journal)
+        _save_manual_context(
+            normalized_date,
+            validated_tags,
+            injury_impact,
+            injury_trend,
+        )
+        record_daily_checkin(normalized_date)
+        local_saved = True
 
         if _has_recovery_values(
             {key: value for key, value in recovery_values.items() if key != "date_value"}
@@ -175,8 +180,6 @@ def _save_checkin(submitted: dict[str, list[str]]) -> RedirectResponse:
             result = record_recovery_checkin(**recovery_values)
             recovery_saved = True
             saved_date = result["date"]
-        elif not local_saved:
-            raise ValueError("at least one recovery value, journal entry, or context tag must be supplied")
         else:
             saved_date = normalized_date
 
@@ -219,6 +222,7 @@ def history(
     provider_error = None
     local = {}
     wellness = []
+    coach_decisions_by_date = {}
 
     try:
         local = journal_history(selected_days, as_of=today)
@@ -228,6 +232,15 @@ def history(
         wellness = get_recent_wellness_normalized(selected_days)
     except Exception as error:
         provider_error = str(error)
+    try:
+        oldest = today - timedelta(days=selected_days - 1)
+        for decision in get_head_coach_decisions(limit=1000):
+            if oldest <= decision.assessment_date <= today:
+                coach_decisions_by_date.setdefault(
+                    decision.assessment_date.isoformat(), []
+                ).append(decision)
+    except Exception:
+        logger.exception("Head Coach decision history could not be loaded")
 
     wellness_by_date = {
         record["date"][:10]: record
@@ -244,6 +257,9 @@ def history(
                 "wellness": wellness_by_date.get(entry_date),
                 "journal_text": local_entry.get("journal_text"),
                 "context": local_entry.get("context", []),
+                "coach_decisions": coach_decisions_by_date.get(
+                    entry_date, []
+                ),
                 "is_editing": entry_date == edit,
             }
         )

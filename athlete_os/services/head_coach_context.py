@@ -1,10 +1,12 @@
+import logging
 from datetime import date, timedelta
 
 from athlete_os.services.intervals_client import (
     get_activities_normalized,
     get_wellness_normalized,
 )
-from athlete_os.services.journal_store import journal_history
+from athlete_os.services.journal_store import daily_checkin_exists, journal_history
+from athlete_os.services.head_coach_memory import record_head_coach_decision
 from athlete_os.tools.head_coach import (
     HeadCoachAssessment,
     HeadCoachConstraint,
@@ -24,6 +26,7 @@ from athlete_os.tools.training_context import (
 
 CONTEXT_DAYS = 14
 CURRENT_DAYS = 2
+logger = logging.getLogger(__name__)
 
 
 def _as_of_date(value: date | None) -> date:
@@ -222,10 +225,15 @@ def _constraints(
         "travel": "travel",
     }
     candidates = []
+    checked_in_today = history.get(as_of.isoformat(), {}).get(
+        "checkin_submitted", False
+    )
     for date_value, entry in history.items():
         entry_date = date.fromisoformat(date_value)
         status = _constraint_status(entry_date, as_of)
         if status is None:
+            continue
+        if checked_in_today and entry_date < as_of:
             continue
         for context in entry.get("context", []):
             constraint_type = tag_types.get(context["tag"])
@@ -240,6 +248,7 @@ def _constraints(
                 candidates.append(
                     (
                         constraint_type,
+                        entry_date,
                         context["tag"].replace("_", " "),
                         status,
                         severity,
@@ -258,16 +267,30 @@ def _constraints(
         status = _constraint_status(measured, as_of)
         if status:
             severity = "high" if latest["label"] == "extreme" else "moderate"
-            candidates.append((constraint_type, detail, status, severity, None, None))
+            candidates.append(
+                (
+                    constraint_type, measured, detail, status, severity,
+                    None, None,
+                )
+            )
 
-    # One constraint per type: prefer active, then higher severity.
+    # Historical severity describes what was true then. The newest explicit
+    # observation describes what is true now. Only evidence on that newest
+    # date is merged conservatively.
     status_rank = {"active": 2, "resolving": 1}
     severity_rank = {"low": 0, "moderate": 1, "high": 2}
+    newest_dates = {}
+    for constraint_type, source_date, *_ in candidates:
+        newest_dates[constraint_type] = max(
+            source_date, newest_dates.get(constraint_type, source_date)
+        )
     merged = {}
-    for constraint_type, detail, status, severity, impact, trend in candidates:
+    for constraint_type, source_date, detail, status, severity, impact, trend in candidates:
+        if source_date != newest_dates[constraint_type]:
+            continue
         candidate = (
             status_rank[status], severity_rank[severity], detail, status,
-            severity, impact, trend,
+            severity, impact, trend, source_date,
         )
         if constraint_type not in merged or candidate[:2] > merged[constraint_type][:2]:
             merged[constraint_type] = candidate
@@ -279,6 +302,7 @@ def _constraints(
             severity=values[4],
             injury_impact=values[5],
             injury_trend=values[6],
+            source_date=values[7],
         )
         for constraint_type, values in sorted(merged.items())
     ]
@@ -354,5 +378,19 @@ def build_head_coach_signals(*, as_of: date | None = None) -> HeadCoachSignals:
     )
 
 
-def get_daily_head_coach(*, as_of: date | None = None) -> HeadCoachAssessment:
-    return build_head_coach_assessment(build_head_coach_signals(as_of=as_of))
+def get_daily_head_coach(
+    *, as_of: date | None = None
+) -> HeadCoachAssessment | None:
+    as_of_date = _as_of_date(as_of)
+    if not daily_checkin_exists(as_of_date.isoformat()):
+        return None
+
+    signals = build_head_coach_signals(as_of=as_of_date)
+    assessment = build_head_coach_assessment(signals)
+    try:
+        record_head_coach_decision(signals=signals, assessment=assessment)
+    except Exception:
+        logger.exception(
+            "Head Coach decision persistence failed for %s", assessment.date
+        )
+    return assessment

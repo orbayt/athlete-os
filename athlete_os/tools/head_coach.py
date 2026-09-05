@@ -4,6 +4,9 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 
+HEAD_COACH_POLICY_VERSION = "daily_head_coach_v0.1"
+
+
 SignalState = Literal["poor", "strained", "mixed", "good", "unknown"]
 TrainingLoadState = Literal["low", "normal", "high", "unknown"]
 ConstraintType = Literal[
@@ -33,6 +36,7 @@ class HeadCoachConstraint(BaseModel):
     severity: ConstraintSeverity = "low"
     injury_impact: InjuryImpact | None = None
     injury_trend: InjuryTrend | None = None
+    source_date: date | None = None
 
 
 class HeadCoachSignals(BaseModel):

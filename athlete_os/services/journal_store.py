@@ -80,6 +80,12 @@ def _connect() -> sqlite3.Connection:
             injury_trend TEXT NULL,
             PRIMARY KEY (date, tag, source)
         );
+
+        CREATE TABLE IF NOT EXISTS daily_checkin (
+            date TEXT PRIMARY KEY,
+            submitted_at TEXT NOT NULL,
+            source TEXT NOT NULL CHECK (source IN ('manual'))
+        );
         """
     )
     journal_columns = {
@@ -103,6 +109,41 @@ def _connect() -> sqlite3.Connection:
     if "injury_trend" not in context_columns:
         connection.execute("ALTER TABLE daily_context ADD COLUMN injury_trend TEXT NULL")
     return connection
+
+
+def record_daily_checkin(date_value: str, source: str = "manual") -> None:
+    _validated_date(date_value)
+    if source != "manual":
+        raise ValueError("invalid check-in source")
+    submitted_at = datetime.now(timezone.utc).isoformat()
+    with closing(_connect()) as connection:
+        with connection:
+            connection.execute(
+                """INSERT INTO daily_checkin (date, submitted_at, source)
+                   VALUES (?, ?, ?)
+                   ON CONFLICT(date) DO UPDATE SET
+                       submitted_at = excluded.submitted_at,
+                       source = excluded.source""",
+                (date_value, submitted_at, source),
+            )
+
+
+def delete_daily_checkin(date_value: str) -> None:
+    _validated_date(date_value)
+    with closing(_connect()) as connection:
+        with connection:
+            connection.execute(
+                "DELETE FROM daily_checkin WHERE date = ?", (date_value,)
+            )
+
+
+def daily_checkin_exists(date_value: str) -> bool:
+    _validated_date(date_value)
+    with closing(_connect()) as connection:
+        row = connection.execute(
+            "SELECT 1 FROM daily_checkin WHERE date = ?", (date_value,)
+        ).fetchone()
+    return row is not None
 
 
 def save_daily_journal(
@@ -209,6 +250,11 @@ def journal_history(days: int = 14, as_of: date | None = None) -> dict[str, dict
             """,
             (oldest.isoformat(), as_of.isoformat()),
         ).fetchall()
+        checkins = connection.execute(
+            """SELECT date, submitted_at, source FROM daily_checkin
+               WHERE date BETWEEN ? AND ? ORDER BY date DESC""",
+            (oldest.isoformat(), as_of.isoformat()),
+        ).fetchall()
 
     history: dict[str, dict] = {}
     for row in journals:
@@ -218,6 +264,7 @@ def journal_history(days: int = 14, as_of: date | None = None) -> dict[str, dict
             "created_at": row["created_at"],
             "updated_at": row["updated_at"],
             "context": [],
+            "checkin_submitted": False,
         }
     for row in contexts:
         entry = history.setdefault(
@@ -228,6 +275,7 @@ def journal_history(days: int = 14, as_of: date | None = None) -> dict[str, dict
                 "created_at": None,
                 "updated_at": None,
                 "context": [],
+                "checkin_submitted": False,
             },
         )
         entry["context"].append(
@@ -241,6 +289,21 @@ def journal_history(days: int = 14, as_of: date | None = None) -> dict[str, dict
                 "injury_trend": row["injury_trend"],
             }
         )
+    for row in checkins:
+        entry = history.setdefault(
+            row["date"],
+            {
+                "journal_text": None,
+                "journal_source": None,
+                "created_at": None,
+                "updated_at": None,
+                "context": [],
+                "checkin_submitted": False,
+            },
+        )
+        entry["checkin_submitted"] = True
+        entry["checkin_submitted_at"] = row["submitted_at"]
+        entry["checkin_source"] = row["source"]
     return history
 
 

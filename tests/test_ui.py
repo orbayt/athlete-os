@@ -1,5 +1,9 @@
+import os
+import tempfile
 import unittest
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
+from types import SimpleNamespace
+from pathlib import Path
 from unittest.mock import patch
 
 from starlette.requests import Request
@@ -7,6 +11,7 @@ from starlette.requests import Request
 from athlete_os.tools.recovery_context import build_recovery_context
 from athlete_os.tools.training_context import build_training_context
 from athlete_os.tools.head_coach import HeadCoachAssessment
+from athlete_os.services.head_coach_memory import get_head_coach_decisions
 from athlete_os.ui.app import (
     _save_checkin,
     _save_history_edit,
@@ -104,6 +109,52 @@ class UiTests(unittest.TestCase):
         self.assertNotIn("NORMAL TRAINING", body)
         self.assertIn("Head Coach assessment generation failed", logs.output[0])
 
+    @patch("athlete_os.ui.app.get_daily_head_coach", return_value=None)
+    @patch("athlete_os.ui.app.latest_daily_journal", return_value=None)
+    @patch("athlete_os.ui.app.recovery_context")
+    @patch("athlete_os.ui.app.training_context")
+    def test_dashboard_awaits_explicit_checkin(
+        self, training, recovery, latest_journal, get_head_coach
+    ):
+        today = date.today()
+        training.return_value = build_training_context([], today)
+        recovery.return_value = build_recovery_context([], today)
+
+        response = dashboard(get_request("/"))
+        body = response.body.decode()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("AWAITING CHECK-IN", body)
+        self.assertIn(
+            "Complete today's check-in to get a new recommendation.", body
+        )
+        coach_card = body.split("HEAD COACH · TODAY", 1)[1].split(
+            "Training State", 1
+        )[0]
+        self.assertNotIn("WATCH", coach_card)
+        self.assertNotIn("NEXT", coach_card)
+        self.assertNotIn("Why this recommendation?", coach_card)
+
+    @patch("athlete_os.ui.app.latest_daily_journal", return_value=None)
+    @patch("athlete_os.ui.app.recovery_context")
+    @patch("athlete_os.ui.app.training_context")
+    def test_repeated_dashboard_refresh_without_checkin_creates_no_memory(
+        self, training, recovery, latest_journal
+    ):
+        today = date.today()
+        training.return_value = build_training_context([], today)
+        recovery.return_value = build_recovery_context([], today)
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            db_path = Path(temporary_directory) / "ui.sqlite3"
+            with patch.dict(os.environ, {"ATHLETE_OS_DB_PATH": str(db_path)}):
+                first = dashboard(get_request("/"))
+                second = dashboard(get_request("/"))
+                decisions = get_head_coach_decisions(assessment_date=today)
+
+        self.assertIn("AWAITING CHECK-IN", first.body.decode())
+        self.assertIn("AWAITING CHECK-IN", second.body.decode())
+        self.assertEqual(decisions, [])
+
     @patch("athlete_os.ui.app.get_daily_head_coach")
     @patch("athlete_os.ui.app.latest_daily_journal", return_value=None)
     @patch("athlete_os.ui.app.recovery_context")
@@ -130,11 +181,12 @@ class UiTests(unittest.TestCase):
 
         self.assertIn("Mixed overnight wear context", response.body.decode())
 
+    @patch("athlete_os.ui.app.record_daily_checkin")
     @patch("athlete_os.ui.app.replace_manual_context")
     @patch("athlete_os.ui.app.save_daily_journal")
     @patch("athlete_os.ui.app.record_recovery_checkin")
     def test_checkin_passes_canonical_values_and_none_for_blanks(
-        self, record, save_journal, replace_context
+        self, record, save_journal, replace_context, record_marker
     ):
         record.return_value = {"date": "2026-09-02", "recorded": {}}
 
@@ -167,7 +219,9 @@ class UiTests(unittest.TestCase):
         replace_context.assert_called_once_with(
             "2026-09-02", ["travel", "work_stress"]
         )
+        record_marker.assert_called_once_with("2026-09-02")
 
+    @patch("athlete_os.ui.app.record_daily_checkin")
     @patch("athlete_os.ui.app.replace_manual_context")
     @patch("athlete_os.ui.app.save_daily_journal")
     @patch(
@@ -175,7 +229,7 @@ class UiTests(unittest.TestCase):
         side_effect=RuntimeError("Intervals unavailable"),
     )
     def test_local_journal_survives_provider_failure(
-        self, record, save_journal, replace_context
+        self, record, save_journal, replace_context, record_marker
     ):
         response = _save_checkin(form_data(
                 {
@@ -188,14 +242,16 @@ class UiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 303)
         save_journal.assert_called_once_with("2026-09-02", "A long day.")
         replace_context.assert_called_once_with("2026-09-02", [])
+        record_marker.assert_called_once_with("2026-09-02")
         self.assertIn("saved+locally", response.headers["location"])
         self.assertIn("Intervals+unavailable", response.headers["location"])
 
+    @patch("athlete_os.ui.app.record_daily_checkin")
     @patch("athlete_os.ui.app.record_recovery_checkin")
     @patch("athlete_os.ui.app.replace_manual_context")
     @patch("athlete_os.ui.app.save_daily_journal")
     def test_context_tags_only_is_valid(
-        self, save_journal, replace_context, record
+        self, save_journal, replace_context, record, record_marker
     ):
         response = _save_checkin(form_data(
                 {"date": "2026-09-02", "context_tags": "family_load"}
@@ -204,10 +260,14 @@ class UiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 303)
         save_journal.assert_not_called()
         replace_context.assert_called_once_with("2026-09-02", ["family_load"])
+        record_marker.assert_called_once_with("2026-09-02")
         record.assert_not_called()
 
+    @patch("athlete_os.ui.app.record_daily_checkin")
     @patch("athlete_os.ui.app.replace_manual_context")
-    def test_checkin_passes_structured_injury_context(self, replace_context):
+    def test_checkin_passes_structured_injury_context(
+        self, replace_context, record_marker
+    ):
         response = _save_checkin(form_data({
             "date": "2026-09-02",
             "context_tags": "injury_niggle",
@@ -220,11 +280,13 @@ class UiTests(unittest.TestCase):
             "2026-09-02", ["injury_niggle"],
             injury_impact="daily_noticeable", injury_trend="better",
         )
+        record_marker.assert_called_once_with("2026-09-02")
 
+    @patch("athlete_os.ui.app.get_head_coach_decisions", return_value=[])
     @patch("athlete_os.ui.app.get_recent_wellness_normalized")
     @patch("athlete_os.ui.app.journal_history")
     def test_history_renders_migrated_journal_without_legacy_ui(
-        self, local_history, get_wellness
+        self, local_history, get_wellness, get_decisions
     ):
         today = date.today().isoformat()
         local_history.return_value = {
@@ -281,10 +343,11 @@ class UiTests(unittest.TestCase):
         self.assertNotIn("Provider-side historical copy", body)
         self.assertNotIn("Provider copy", body)
 
+    @patch("athlete_os.ui.app.get_head_coach_decisions", return_value=[])
     @patch("athlete_os.ui.app.get_recent_wellness_normalized")
     @patch("athlete_os.ui.app.journal_history")
     def test_history_edit_mode_prefills_manual_fields_and_current_tags(
-        self, local_history, get_wellness
+        self, local_history, get_wellness, get_decisions
     ):
         today = date.today().isoformat()
         local_history.return_value = {
@@ -365,10 +428,11 @@ class UiTests(unittest.TestCase):
             f"edit={today}#day-{today}", normal_body
         )
 
+    @patch("athlete_os.ui.app.get_head_coach_decisions", return_value=[])
     @patch("athlete_os.ui.app.get_recent_wellness_normalized")
     @patch("athlete_os.ui.app.journal_history")
     def test_migrated_context_prefills_the_single_journal_field(
-        self, local_history, get_wellness
+        self, local_history, get_wellness, get_decisions
     ):
         today = date.today().isoformat()
         local_history.return_value = {
@@ -391,6 +455,44 @@ class UiTests(unittest.TestCase):
         self.assertEqual(textarea, "Migrated journal text")
         self.assertNotIn("Legacy context", body)
         self.assertNotIn("Legacy text only", body)
+
+    @patch("athlete_os.ui.app.get_head_coach_decisions")
+    @patch("athlete_os.ui.app.get_recent_wellness_normalized", return_value=[])
+    @patch("athlete_os.ui.app.journal_history", return_value={})
+    def test_history_renders_latest_and_same_day_decision_history(
+        self, local_history, get_wellness, get_decisions
+    ):
+        current_date = date.today()
+        earlier = SimpleNamespace(
+            assessment_date=current_date,
+            created_at=datetime(2026, 9, 5, 8, 0, tzinfo=timezone.utc),
+            assessment=self.head_coach(
+                date=current_date,
+                state="test_load",
+                reality="Load tolerance was unknown.",
+                session_guidance="Test the system carefully.",
+            ),
+        )
+        latest = SimpleNamespace(
+            assessment_date=current_date,
+            created_at=datetime(2026, 9, 5, 9, 30, tzinfo=timezone.utc),
+            assessment=self.head_coach(
+                date=current_date,
+                state="active_recovery",
+                reality="Daily movement is still uncomfortable.",
+                session_guidance="No running today.",
+            ),
+        )
+        get_decisions.return_value = [latest, earlier]
+
+        body = history(get_request("/history")).body.decode()
+
+        self.assertIn("HEAD COACH", body)
+        self.assertIn("ACTIVE RECOVERY", body)
+        self.assertIn("No running today.", body)
+        self.assertIn("2 coach decisions", body)
+        self.assertIn("TEST LOAD", body)
+        self.assertLess(body.index("08:00"), body.index("09:30"))
 
     @patch("athlete_os.ui.app.replace_manual_context")
     @patch("athlete_os.ui.app.delete_daily_journal")

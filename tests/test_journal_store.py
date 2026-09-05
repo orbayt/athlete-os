@@ -8,11 +8,14 @@ from pathlib import Path
 from unittest.mock import patch
 
 from athlete_os.services.journal_store import (
+    daily_checkin_exists,
     database_path,
+    delete_daily_checkin,
     delete_daily_journal,
     journal_history,
     migrate_legacy_context_notes,
     replace_manual_context,
+    record_daily_checkin,
     save_daily_journal,
 )
 
@@ -129,6 +132,27 @@ class JournalStoreTests(unittest.TestCase):
 
         delete_daily_journal(self.day)
 
+        self.assertNotIn(self.day, journal_history())
+
+    def test_daily_checkin_marker_is_idempotent_and_deletable(self):
+        self.assertFalse(daily_checkin_exists(self.day))
+        record_daily_checkin(self.day)
+        first = journal_history()[self.day]["checkin_submitted_at"]
+        record_daily_checkin(self.day)
+        entry = journal_history()[self.day]
+
+        self.assertTrue(entry["checkin_submitted"])
+        self.assertGreaterEqual(entry["checkin_submitted_at"], first)
+        with closing(sqlite3.connect(self.db_path)) as connection:
+            count = connection.execute(
+                "SELECT COUNT(*) FROM daily_checkin WHERE date = ?",
+                (self.day,),
+            ).fetchone()[0]
+        self.assertEqual(count, 1)
+        self.assertTrue(daily_checkin_exists(self.day))
+
+        delete_daily_checkin(self.day)
+        self.assertFalse(daily_checkin_exists(self.day))
         self.assertNotIn(self.day, journal_history())
 
     def test_manual_context_tags_are_persisted_with_manual_metadata(self):
