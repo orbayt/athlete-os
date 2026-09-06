@@ -1,7 +1,9 @@
 import unittest
 from datetime import date, timedelta
+from types import SimpleNamespace
 from unittest.mock import patch
 
+from athlete_os.services.execution_store import DailyExecution
 from athlete_os.services.head_coach_context import (
     build_head_coach_signals,
     get_daily_head_coach,
@@ -49,12 +51,28 @@ class HeadCoachContextTests(unittest.TestCase):
             patch("athlete_os.services.head_coach_context.get_activities_normalized"),
             patch("athlete_os.services.head_coach_context.get_wellness_normalized"),
             patch("athlete_os.services.head_coach_context.journal_history"),
+            patch("athlete_os.services.head_coach_context.resolve_daily_execution"),
+            patch(
+                "athlete_os.services.head_coach_context.get_latest_head_coach_decision"
+            ),
         ]
         self.addCleanup(patch.stopall)
-        self.get_activities, self.get_wellness, self.get_history = [
+        (
+            self.get_activities,
+            self.get_wellness,
+            self.get_history,
+            self.resolve_execution,
+            self.get_previous_decision,
+        ) = [
             patcher.start() for patcher in patchers
         ]
         self.get_history.return_value = {}
+        self.resolve_execution.return_value = DailyExecution(
+            date=AS_OF - timedelta(days=1),
+            execution_type="UNKNOWN",
+            source="derived",
+        )
+        self.get_previous_decision.return_value = None
 
     def test_healthy_normal_case(self):
         self.get_activities.return_value = [
@@ -86,6 +104,32 @@ class HeadCoachContextTests(unittest.TestCase):
         self.assertEqual(signals.sleep_state, "good")
         self.assertEqual(signals.constraints, [])
         self.assertEqual(build_head_coach_assessment(signals).state, "normal")
+
+    def test_previous_day_execution_and_decision_are_exposed(self):
+        previous = AS_OF - timedelta(days=1)
+        previous_activity = activity(1, activity_type="Run", load=25)
+        previous_activity["id"] = "activity-42"
+        self.get_activities.return_value = [previous_activity]
+        self.get_wellness.return_value = []
+        self.resolve_execution.return_value = DailyExecution(
+            date=previous,
+            execution_type="ACTIVITY",
+            source="provider",
+            activity_id="activity-42",
+        )
+        self.get_previous_decision.return_value = SimpleNamespace(
+            assessment=SimpleNamespace(state="easy")
+        )
+
+        signals = build_head_coach_signals(as_of=AS_OF)
+
+        self.resolve_execution.assert_called_once_with(
+            previous.isoformat(), [previous_activity]
+        )
+        self.assertEqual(signals.previous_day.coach_decision, "easy")
+        self.assertEqual(signals.previous_day.execution.type, "ACTIVITY")
+        self.assertEqual(signals.previous_day.execution.source, "provider")
+        self.assertEqual(signals.previous_day.activities, [previous_activity])
 
     def test_forced_inactivity_and_resolving_back_issue(self):
         self.get_activities.return_value = [

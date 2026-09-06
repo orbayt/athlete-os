@@ -25,6 +25,26 @@ AssessmentState = Literal[
     "rest", "active_recovery", "test_load", "easy", "normal"
 ]
 Confidence = Literal["low", "medium", "high"]
+ExecutionType = Literal["REST", "ACTIVE_RECOVERY", "ACTIVITY", "UNKNOWN"]
+ExecutionSource = Literal["provider", "manual", "derived"]
+
+
+class HeadCoachExecution(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    type: ExecutionType
+    source: ExecutionSource
+    activity_id: str | None = None
+    notes: str | None = None
+
+
+class HeadCoachPreviousDay(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    date: date
+    coach_decision: AssessmentState | None = None
+    execution: HeadCoachExecution
+    activities: list[dict] = Field(default_factory=list)
 
 
 class HeadCoachConstraint(BaseModel):
@@ -52,6 +72,7 @@ class HeadCoachSignals(BaseModel):
     constraints: list[HeadCoachConstraint] = Field(default_factory=list)
     objective_data_coverage: float = Field(ge=0.0, le=1.0)
     subjective_data_available: bool
+    previous_day: HeadCoachPreviousDay | None = None
 
 
 class HeadCoachAssessment(BaseModel):

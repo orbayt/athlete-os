@@ -8,7 +8,14 @@ from fastapi import FastAPI, Request
 from fastapi.responses import RedirectResponse
 from fastapi.templating import Jinja2Templates
 
-from athlete_os.services.intervals_client import get_recent_wellness_normalized
+from athlete_os.services.intervals_client import (
+    get_activities_normalized,
+    get_recent_wellness_normalized,
+)
+from athlete_os.services.execution_store import (
+    resolve_daily_execution,
+    upsert_manual_execution,
+)
 from athlete_os.services.head_coach_context import get_daily_head_coach
 from athlete_os.services.head_coach_memory import get_head_coach_decisions
 from athlete_os.services.journal_store import (
@@ -220,8 +227,11 @@ def history(
     today = date.today()
     local_error = None
     provider_error = None
+    activity_error = None
+    execution_error = None
     local = {}
     wellness = []
+    activities = []
     coach_decisions_by_date = {}
 
     try:
@@ -232,6 +242,11 @@ def history(
         wellness = get_recent_wellness_normalized(selected_days)
     except Exception as error:
         provider_error = str(error)
+    try:
+        oldest = today - timedelta(days=selected_days - 1)
+        activities = get_activities_normalized(oldest, today)
+    except Exception as error:
+        activity_error = str(error)
     try:
         oldest = today - timedelta(days=selected_days - 1)
         for decision in get_head_coach_decisions(limit=1000):
@@ -247,16 +262,36 @@ def history(
         for record in wellness
         if isinstance(record.get("date"), str)
     }
+    activities_by_date = {}
+    for activity in activities:
+        if isinstance(activity.get("date"), str):
+            activities_by_date.setdefault(activity["date"][:10], []).append(
+                activity
+            )
     entries = []
     for offset in range(selected_days):
         entry_date = (today - timedelta(days=offset)).isoformat()
         local_entry = local.get(entry_date, {})
+        day_activities = activities_by_date.get(entry_date, [])
+        execution = None
+        try:
+            execution = resolve_daily_execution(entry_date, day_activities)
+        except Exception as error:
+            execution_error = str(error)
         entries.append(
             {
                 "date": entry_date,
                 "wellness": wellness_by_date.get(entry_date),
                 "journal_text": local_entry.get("journal_text"),
                 "context": local_entry.get("context", []),
+                "activities": day_activities,
+                "execution": execution,
+                "can_close_execution": (
+                    entry_date < today.isoformat()
+                    and not activity_error
+                    and execution is not None
+                    and execution.execution_type == "UNKNOWN"
+                ),
                 "coach_decisions": coach_decisions_by_date.get(
                     entry_date, []
                 ),
@@ -272,11 +307,54 @@ def history(
             "days": selected_days,
             "local_error": local_error,
             "provider_error": provider_error,
+            "activity_error": activity_error,
+            "execution_error": execution_error,
             "message": message,
             "error": error,
             "context_tag_labels": CONTEXT_TAG_LABELS,
         },
     )
+
+
+def _save_execution(submitted: dict[str, list[str]]) -> RedirectResponse:
+    def field(name: str) -> str:
+        return submitted.get(name, [""])[-1]
+
+    date_value = field("date")
+    try:
+        days = _history_days(int(field("days") or 14))
+    except ValueError:
+        days = 14
+    try:
+        if date.fromisoformat(date_value) >= date.today():
+            raise ValueError("execution can only be closed for a past date")
+        execution = upsert_manual_execution(
+            date_value,
+            field("execution_type"),
+            _journal_text(field("notes")),
+        )
+        query = urlencode(
+            {
+                "days": days,
+                "message": (
+                    f"{date_value}: actual execution saved as "
+                    f"{execution.execution_type.replace('_', ' ').title()}."
+                ),
+            }
+        )
+    except Exception as error:
+        query = urlencode({"days": days, "error": str(error)})
+    return RedirectResponse(
+        url=f"/history?{query}#day-{date_value}", status_code=303
+    )
+
+
+@app.post("/history/execution")
+async def save_execution(request: Request):
+    submitted = parse_qs(
+        (await request.body()).decode("utf-8"), keep_blank_values=True
+    )
+    return _save_execution(submitted)
 
 
 def _save_history_edit(submitted: dict[str, list[str]]) -> RedirectResponse:

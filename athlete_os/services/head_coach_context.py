@@ -5,11 +5,17 @@ from athlete_os.services.intervals_client import (
     get_activities_normalized,
     get_wellness_normalized,
 )
+from athlete_os.services.execution_store import resolve_daily_execution
 from athlete_os.services.journal_store import daily_checkin_exists, journal_history
-from athlete_os.services.head_coach_memory import record_head_coach_decision
+from athlete_os.services.head_coach_memory import (
+    get_latest_head_coach_decision,
+    record_head_coach_decision,
+)
 from athlete_os.tools.head_coach import (
     HeadCoachAssessment,
     HeadCoachConstraint,
+    HeadCoachExecution,
+    HeadCoachPreviousDay,
     HeadCoachSignals,
     build_head_coach_assessment,
 )
@@ -361,6 +367,19 @@ def build_head_coach_signals(*, as_of: date | None = None) -> HeadCoachSignals:
     history = journal_history(CONTEXT_DAYS, as_of=as_of_date)
     training = build_training_context(activities, as_of_date)
     recovery = build_recovery_context(wellness, as_of_date)
+    previous_date = as_of_date - timedelta(days=1)
+    previous_activities = [
+        activity
+        for activity in activities
+        if isinstance(activity.get("date"), str)
+        and activity["date"][:10] == previous_date.isoformat()
+    ]
+    previous_execution = resolve_daily_execution(
+        previous_date.isoformat(), previous_activities
+    )
+    previous_decision = get_latest_head_coach_decision(
+        assessment_date=previous_date
+    )
 
     return HeadCoachSignals(
         as_of=as_of_date,
@@ -374,6 +393,21 @@ def build_head_coach_signals(*, as_of: date | None = None) -> HeadCoachSignals:
         objective_data_coverage=_objective_coverage(training, recovery),
         subjective_data_available=_subjective_available(
             recovery, history, as_of_date
+        ),
+        previous_day=HeadCoachPreviousDay(
+            date=previous_date,
+            coach_decision=(
+                previous_decision.assessment.state
+                if previous_decision is not None
+                else None
+            ),
+            execution=HeadCoachExecution(
+                type=previous_execution.execution_type,
+                source=previous_execution.source,
+                activity_id=previous_execution.activity_id,
+                notes=previous_execution.notes,
+            ),
+            activities=previous_activities,
         ),
     )
 

@@ -11,9 +11,11 @@ from starlette.requests import Request
 from athlete_os.tools.recovery_context import build_recovery_context
 from athlete_os.tools.training_context import build_training_context
 from athlete_os.tools.head_coach import HeadCoachAssessment
+from athlete_os.services.execution_store import DailyExecution
 from athlete_os.services.head_coach_memory import get_head_coach_decisions
 from athlete_os.ui.app import (
     _save_checkin,
+    _save_execution,
     _save_history_edit,
     dashboard,
     history,
@@ -34,6 +36,28 @@ def get_request(path):
 
 
 class UiTests(unittest.TestCase):
+    def setUp(self):
+        self.activities_patcher = patch(
+            "athlete_os.ui.app.get_activities_normalized", return_value=[]
+        )
+        self.execution_patcher = patch(
+            "athlete_os.ui.app.resolve_daily_execution",
+            side_effect=lambda date_value, activities: DailyExecution(
+                date=date.fromisoformat(date_value),
+                execution_type="ACTIVITY" if activities else "UNKNOWN",
+                source="provider" if activities else "derived",
+                activity_id=(
+                    str(activities[0]["id"])
+                    if activities and activities[0].get("id") is not None
+                    else None
+                ),
+            ),
+        )
+        self.get_activities = self.activities_patcher.start()
+        self.resolve_execution = self.execution_patcher.start()
+        self.addCleanup(self.activities_patcher.stop)
+        self.addCleanup(self.execution_patcher.stop)
+
     def head_coach(self, **overrides):
         values = {
             "date": date.today(),
@@ -493,6 +517,75 @@ class UiTests(unittest.TestCase):
         self.assertIn("2 coach decisions", body)
         self.assertIn("TEST LOAD", body)
         self.assertLess(body.index("08:00"), body.index("09:30"))
+
+    @patch("athlete_os.ui.app.get_head_coach_decisions", return_value=[])
+    @patch("athlete_os.ui.app.get_recent_wellness_normalized", return_value=[])
+    @patch("athlete_os.ui.app.journal_history", return_value={})
+    def test_history_shows_provider_execution_without_manual_confirmation(
+        self, local_history, get_wellness, get_decisions
+    ):
+        yesterday = date.today() - timedelta(days=1)
+        self.get_activities.return_value = [
+            {
+                "id": "activity-9",
+                "date": f"{yesterday.isoformat()}T08:00:00",
+                "type": "Run",
+                "distance_km": 5.0,
+            }
+        ]
+
+        body = history(get_request("/history")).body.decode()
+        card = body.split(f'id="day-{yesterday.isoformat()}"', 1)[1].split(
+            "</article>", 1
+        )[0]
+
+        self.assertIn("Activity recorded", card)
+        self.assertIn("Provider", card)
+        self.assertNotIn("Choose outcome", card)
+
+    @patch("athlete_os.ui.app.get_head_coach_decisions", return_value=[])
+    @patch("athlete_os.ui.app.get_recent_wellness_normalized", return_value=[])
+    @patch("athlete_os.ui.app.journal_history", return_value={})
+    def test_history_allows_unknown_past_day_to_be_closed(
+        self, local_history, get_wellness, get_decisions
+    ):
+        yesterday = (date.today() - timedelta(days=1)).isoformat()
+
+        body = history(get_request("/history")).body.decode()
+        card = body.split(f'id="day-{yesterday}"', 1)[1].split(
+            "</article>", 1
+        )[0]
+
+        self.assertIn('action="/history/execution"', card)
+        self.assertIn(">Activity<", card)
+        self.assertIn("Optional note", card)
+
+    @patch("athlete_os.ui.app.upsert_manual_execution")
+    def test_history_execution_save_preserves_range_and_anchor(self, upsert):
+        yesterday = (date.today() - timedelta(days=1)).isoformat()
+        upsert.return_value = DailyExecution(
+            date=date.fromisoformat(yesterday),
+            execution_type="REST",
+            source="manual",
+        )
+
+        response = _save_execution(
+            form_data(
+                {
+                    "date": yesterday,
+                    "days": "30",
+                    "execution_type": "REST",
+                    "notes": "  Deliberate rest  ",
+                }
+            )
+        )
+
+        upsert.assert_called_once_with(yesterday, "REST", "Deliberate rest")
+        self.assertEqual(response.status_code, 303)
+        self.assertIn("days=30", response.headers["location"])
+        self.assertTrue(
+            response.headers["location"].endswith(f"#day-{yesterday}")
+        )
 
     @patch("athlete_os.ui.app.replace_manual_context")
     @patch("athlete_os.ui.app.delete_daily_journal")
