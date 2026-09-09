@@ -13,6 +13,10 @@ from athlete_os.tools.training_context import build_training_context
 from athlete_os.tools.head_coach import HeadCoachAssessment
 from athlete_os.services.execution_store import DailyExecution
 from athlete_os.services.head_coach_memory import get_head_coach_decisions
+from athlete_os.services.journal_store import (
+    daily_checkin_exists,
+    record_daily_checkin,
+)
 from athlete_os.ui.app import (
     _save_checkin,
     _save_execution,
@@ -72,6 +76,21 @@ class UiTests(unittest.TestCase):
         }
         values.update(overrides)
         return HeadCoachAssessment(**values)
+
+    def complete_checkin_form(self, date_value):
+        return form_data(
+            {
+                "date": date_value,
+                "sleep_hours": "8",
+                "sleep_quality": "excellent",
+                "fatigue": "none",
+                "soreness": "none",
+                "stress": "none",
+                "mood": "good",
+                "motivation": "excellent",
+                "journal_text": "Complete daily report",
+            }
+        )
 
     @patch("athlete_os.ui.app.get_daily_head_coach")
     @patch("athlete_os.ui.app.latest_daily_journal", return_value=None)
@@ -205,7 +224,7 @@ class UiTests(unittest.TestCase):
 
         self.assertIn("Mixed overnight wear context", response.body.decode())
 
-    @patch("athlete_os.ui.app.record_daily_checkin")
+    @patch("athlete_os.ui.app.record_daily_checkin_if_complete")
     @patch("athlete_os.ui.app.replace_manual_context")
     @patch("athlete_os.ui.app.save_daily_journal")
     @patch("athlete_os.ui.app.record_recovery_checkin")
@@ -243,9 +262,22 @@ class UiTests(unittest.TestCase):
         replace_context.assert_called_once_with(
             "2026-09-02", ["travel", "work_stress"]
         )
-        record_marker.assert_called_once_with("2026-09-02")
+        record_marker.assert_called_once_with(
+            "2026-09-02",
+            {
+                "date_value": "2026-09-02",
+                "sleep_hours": 7.5,
+                "sleep_quality": "good",
+                "fatigue": None,
+                "soreness": "low",
+                "stress": None,
+                "mood": "excellent",
+                "motivation": None,
+                "context_note": None,
+            },
+        )
 
-    @patch("athlete_os.ui.app.record_daily_checkin")
+    @patch("athlete_os.ui.app.record_daily_checkin_if_complete")
     @patch("athlete_os.ui.app.replace_manual_context")
     @patch("athlete_os.ui.app.save_daily_journal")
     @patch(
@@ -266,11 +298,11 @@ class UiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 303)
         save_journal.assert_called_once_with("2026-09-02", "A long day.")
         replace_context.assert_called_once_with("2026-09-02", [])
-        record_marker.assert_called_once_with("2026-09-02")
+        record_marker.assert_not_called()
         self.assertIn("saved+locally", response.headers["location"])
         self.assertIn("Intervals+unavailable", response.headers["location"])
 
-    @patch("athlete_os.ui.app.record_daily_checkin")
+    @patch("athlete_os.ui.app.record_daily_checkin_if_complete")
     @patch("athlete_os.ui.app.record_recovery_checkin")
     @patch("athlete_os.ui.app.replace_manual_context")
     @patch("athlete_os.ui.app.save_daily_journal")
@@ -284,10 +316,10 @@ class UiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 303)
         save_journal.assert_not_called()
         replace_context.assert_called_once_with("2026-09-02", ["family_load"])
-        record_marker.assert_called_once_with("2026-09-02")
+        record_marker.assert_not_called()
         record.assert_not_called()
 
-    @patch("athlete_os.ui.app.record_daily_checkin")
+    @patch("athlete_os.ui.app.record_daily_checkin_if_complete")
     @patch("athlete_os.ui.app.replace_manual_context")
     def test_checkin_passes_structured_injury_context(
         self, replace_context, record_marker
@@ -304,7 +336,97 @@ class UiTests(unittest.TestCase):
             "2026-09-02", ["injury_niggle"],
             injury_impact="daily_noticeable", injury_trend="better",
         )
-        record_marker.assert_called_once_with("2026-09-02")
+        record_marker.assert_not_called()
+
+    def test_dashboard_and_history_share_completion_semantics(self):
+        today = date.today().isoformat()
+        dashboard_day = (date.today() - timedelta(days=1)).isoformat()
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            db_path = Path(temporary_directory) / "completion.sqlite3"
+            with patch.dict(os.environ, {"ATHLETE_OS_DB_PATH": str(db_path)}):
+                with patch(
+                    "athlete_os.ui.app.record_recovery_checkin",
+                    side_effect=lambda **values: {
+                        "date": values["date_value"], "recorded": values
+                    },
+                ):
+                    _save_checkin(self.complete_checkin_form(dashboard_day))
+                    history_form = self.complete_checkin_form(today)
+                    history_form["reported_sleep_hours"] = history_form.pop(
+                        "sleep_hours"
+                    )
+                    history_form["reported_sleep_quality"] = history_form.pop(
+                        "sleep_quality"
+                    )
+                    history_response = _save_history_edit(
+                        history_form
+                    )
+
+                self.assertTrue(daily_checkin_exists(dashboard_day))
+                self.assertTrue(daily_checkin_exists(today))
+                self.assertTrue(
+                    history_response.headers["location"].endswith(
+                        f"#day-{today}"
+                    )
+                )
+
+                with (
+                    patch("athlete_os.ui.app.training_context") as training,
+                    patch("athlete_os.ui.app.recovery_context") as recovery,
+                    patch(
+                        "athlete_os.ui.app.get_daily_head_coach",
+                        side_effect=lambda as_of: (
+                            self.head_coach(date=as_of)
+                            if daily_checkin_exists(as_of.isoformat())
+                            else None
+                        ),
+                    ),
+                ):
+                    training.return_value = build_training_context(
+                        [], date.today()
+                    )
+                    recovery.return_value = build_recovery_context(
+                        [], date.today()
+                    )
+                    body = dashboard(get_request("/")).body.decode()
+
+                self.assertNotIn("AWAITING CHECK-IN", body)
+                self.assertIn("TEST LOAD", body)
+
+    @patch("athlete_os.ui.app.record_recovery_checkin")
+    def test_partial_history_edit_does_not_complete_checkin(self, record):
+        record.return_value = {"date": date.today().isoformat(), "recorded": {}}
+        today = date.today().isoformat()
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            db_path = Path(temporary_directory) / "partial.sqlite3"
+            with patch.dict(os.environ, {"ATHLETE_OS_DB_PATH": str(db_path)}):
+                _save_history_edit(
+                    form_data(
+                        {
+                            "date": today,
+                            "fatigue": "low",
+                            "journal_text": "Partial edit",
+                        }
+                    )
+                )
+                completed = daily_checkin_exists(today)
+
+        self.assertFalse(completed)
+
+    @patch("athlete_os.ui.app.record_recovery_checkin")
+    def test_partial_history_edit_preserves_completed_marker(self, record):
+        day = (date.today() - timedelta(days=1)).isoformat()
+        record.return_value = {"date": day, "recorded": {}}
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            db_path = Path(temporary_directory) / "preserved.sqlite3"
+            with patch.dict(os.environ, {"ATHLETE_OS_DB_PATH": str(db_path)}):
+                record_daily_checkin(day)
+                _save_history_edit(
+                    form_data({"date": day, "fatigue": "low"})
+                )
+                completed = daily_checkin_exists(day)
+
+        self.assertTrue(completed)
 
     @patch("athlete_os.ui.app.get_head_coach_decisions", return_value=[])
     @patch("athlete_os.ui.app.get_recent_wellness_normalized")
@@ -587,12 +709,14 @@ class UiTests(unittest.TestCase):
             response.headers["location"].endswith(f"#day-{yesterday}")
         )
 
+    @patch("athlete_os.ui.app.record_daily_checkin_if_complete")
     @patch("athlete_os.ui.app.replace_manual_context")
     @patch("athlete_os.ui.app.delete_daily_journal")
     @patch("athlete_os.ui.app.save_daily_journal")
     @patch("athlete_os.ui.app.record_recovery_checkin")
     def test_history_edit_saves_manual_recovery_journal_and_replaces_tags(
-        self, record, save_journal, delete_journal, replace_context
+        self, record, save_journal, delete_journal, replace_context,
+        record_marker,
     ):
         response = _save_history_edit(
             form_data(
@@ -633,6 +757,7 @@ class UiTests(unittest.TestCase):
             motivation="excellent",
             context_note=None,
         )
+        record_marker.assert_called_once()
 
     @patch("athlete_os.ui.app.record_recovery_checkin")
     @patch("athlete_os.ui.app.replace_manual_context")

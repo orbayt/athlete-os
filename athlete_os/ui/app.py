@@ -16,6 +16,9 @@ from athlete_os.services.execution_store import (
     resolve_daily_execution,
     upsert_manual_execution,
 )
+from athlete_os.services.checkin_completion import (
+    record_daily_checkin_if_complete,
+)
 from athlete_os.services.head_coach_context import get_daily_head_coach
 from athlete_os.services.head_coach_memory import get_head_coach_decisions
 from athlete_os.services.journal_store import (
@@ -24,7 +27,6 @@ from athlete_os.services.journal_store import (
     journal_history,
     latest_daily_journal,
     replace_manual_context,
-    record_daily_checkin,
     save_daily_journal,
     validate_context_tags,
 )
@@ -178,7 +180,6 @@ def _save_checkin(submitted: dict[str, list[str]]) -> RedirectResponse:
             injury_impact,
             injury_trend,
         )
-        record_daily_checkin(normalized_date)
         local_saved = True
 
         if _has_recovery_values(
@@ -187,6 +188,9 @@ def _save_checkin(submitted: dict[str, list[str]]) -> RedirectResponse:
             result = record_recovery_checkin(**recovery_values)
             recovery_saved = True
             saved_date = result["date"]
+            record_daily_checkin_if_complete(
+                normalized_date, recovery_values
+            )
         else:
             saved_date = normalized_date
 
@@ -402,6 +406,7 @@ def _save_history_edit(submitted: dict[str, list[str]]) -> RedirectResponse:
         }
         if _has_recovery_values(recovery_fields):
             record_recovery_checkin(**recovery_values)
+            record_daily_checkin_if_complete(date_value, recovery_values)
             message = f"{date_value}: journal context and recovery check-in saved."
         else:
             message = f"{date_value}: journal context saved locally."
