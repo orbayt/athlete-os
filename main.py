@@ -5,6 +5,7 @@ from athlete_os.tools.activities import activities, recent_activities
 from athlete_os.tools.health import health_check
 from athlete_os.tools.recovery_checkin import record_recovery_checkin
 from athlete_os.tools.recovery_context import recovery_context
+from athlete_os.tools.run_history_context import run_history_context
 from athlete_os.tools.training_context import training_context
 from athlete_os.tools.training_state import training_state
 from athlete_os.tools.wellness import recent_wellness, wellness
@@ -25,6 +26,7 @@ mcp.tool(training_context)
 mcp.tool(record_recovery_checkin)
 mcp.tool(recovery_context)
 mcp.tool(athlete_context)
+mcp.tool(run_history_context)
 
 if __name__ == "__main__":
     mcp.run()

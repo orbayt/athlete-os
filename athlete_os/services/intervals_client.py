@@ -93,6 +93,20 @@ def get_recent_activities(days: int = 30):
     return get_activities(oldest, newest)
 
 
+def get_activity(activity_id: str):
+    if not API_KEY:
+        raise RuntimeError("INTERVALS_API_KEY is not set")
+
+    response = httpx.get(
+        f"{BASE_URL}/activity/{activity_id}",
+        auth=("API_KEY", API_KEY),
+        timeout=30.0,
+    )
+
+    response.raise_for_status()
+    return response.json()
+
+
 def normalize_activity(activity: dict) -> dict:
     distance_m = activity.get("icu_distance") or activity.get("distance")
     moving_time_s = activity.get("moving_time")
@@ -129,6 +143,10 @@ def get_activities_normalized(
         normalize_activity(activity)
         for activity in activities
     ]
+
+
+def get_activity_normalized(activity_id: str) -> dict:
+    return normalize_activity(get_activity(activity_id))
 
 
 def get_recent_activities_normalized(days: int = 30) -> list[dict]:
